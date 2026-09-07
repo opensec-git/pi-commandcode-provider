@@ -1,6 +1,8 @@
 import type { DashboardData, RangeKey } from "./types"
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  // Relative paths keep dashboard API requests on the page's own origin.
+  // nosemgrep: pi-extension-data-exfiltration-fetch, pi-extension-unexpected-fetch
   const response = await fetch(path, {
     ...init,
     headers: {

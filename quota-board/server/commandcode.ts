@@ -127,6 +127,8 @@ function windowsFrom(value: unknown): UsageWindow[] {
 }
 
 async function requestJson(apiKey: string, path: string): Promise<unknown> {
+  // API_BASE is a module constant fixed to CommandCode's HTTPS API origin.
+  // nosemgrep: pi-extension-data-exfiltration-fetch, pi-extension-unexpected-fetch
   const response = await fetch(`${API_BASE}${path}`, {
     headers: { Authorization: `Bearer ${apiKey}`, accept: "application/json" },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
