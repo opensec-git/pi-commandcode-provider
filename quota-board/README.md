@@ -63,7 +63,17 @@ When using this repository's Pi provider, automatic telemetry only needs:
 export COMMANDCODE_QUOTA_BOARD_URL="http://127.0.0.1:8787"
 ```
 
-The provider matches accounts using a short SHA-256 key fingerprint and never sends the API key to the telemetry endpoint. Reporting is asynchronous and best-effort, so an unavailable board cannot delay or fail a Pi response.
+The provider matches accounts using a short SHA-256 key fingerprint and never sends the API key to the telemetry endpoint. Reporting is asynchronous and best-effort, so an unavailable board cannot delay or fail a Pi response. Direct-stream reports also include measured TTFT, output TPS, total/generation duration, weighted cache hit rate, and the provider's labelled CommandCode price estimate.
+
+## Sticky key control plane
+
+Set a separate high-entropy router token on the board:
+
+```bash
+export OPENSEC_ROUTER_TOKEN="<long random master token>"
+```
+
+Then point the Pi provider at the board with `OPENSEC_ROUTER_URL` and the same token. `POST /api/router/lease` selects the healthy account with the highest safe remaining headroom across 5-hour, weekly, and monthly limits. The Pi process keeps that key without polling or timed renewal and sends generation traffic directly to CommandCode. It calls the control plane again only when CommandCode rejects the key and one rotation is needed. `POST /api/router/leases/:id/usage` persists the direct-stream metrics against the account that completed the request.
 
 ## Optional model and cache telemetry
 
@@ -101,18 +111,20 @@ See [`.env.example`](./.env.example) for all configuration options. Do not expos
 
 ## Board API
 
-| Method   | Route                       | Purpose                              |
-| -------- | --------------------------- | ------------------------------------ |
-| `GET`    | `/api/health`               | Liveness check                       |
-| `GET`    | `/api/endpoints`            | CommandCode endpoint inventory       |
-| `GET`    | `/api/dashboard?range=24h`  | Aggregated board state               |
-| `POST`   | `/api/accounts/verify`      | Validate a key without storing it    |
-| `POST`   | `/api/accounts`             | Encrypt and connect an account       |
-| `POST`   | `/api/accounts/:id/refresh` | Refresh one account                  |
-| `POST`   | `/api/accounts/:id/key`     | Copy one key after operator unlock   |
-| `POST`   | `/api/refresh`              | Refresh all accounts, four at a time |
-| `DELETE` | `/api/accounts/:id`         | Remove one key and its local history |
-| `POST`   | `/api/telemetry`            | Ingest model and cache usage         |
+| Method   | Route                          | Purpose                                  |
+| -------- | ------------------------------ | ---------------------------------------- |
+| `GET`    | `/api/health`                  | Liveness check                           |
+| `GET`    | `/api/endpoints`               | CommandCode endpoint inventory           |
+| `GET`    | `/api/dashboard?range=24h`     | Aggregated board state                   |
+| `POST`   | `/api/accounts/verify`         | Validate a key without storing it        |
+| `POST`   | `/api/accounts`                | Encrypt and connect an account           |
+| `POST`   | `/api/accounts/:id/refresh`    | Refresh one account                      |
+| `POST`   | `/api/accounts/:id/key`        | Copy one key after operator unlock       |
+| `POST`   | `/api/refresh`                 | Refresh all accounts, four at a time     |
+| `DELETE` | `/api/accounts/:id`            | Remove one key and its local history     |
+| `POST`   | `/api/telemetry`               | Ingest model and cache usage             |
+| `POST`   | `/api/router/lease`            | Obtain or explicitly rotate a sticky key |
+| `POST`   | `/api/router/leases/:id/usage` | Attribute direct-stream usage to a lease |
 
 ## Quality checks
 

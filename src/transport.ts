@@ -5,6 +5,7 @@ import type {
   ModelLike,
   StreamOptions,
 } from "./types.ts"
+import { calculateTps, type RequestPerformance } from "./metrics.ts"
 
 export type CommandCodeTransport = "unknown" | "provider" | "generate"
 
@@ -22,7 +23,14 @@ interface TransportDependencies {
     context: ContextLike,
     options?: StreamOptions,
   ) => AssistantMessageEventStreamLike
-  observeEvent?: (event: AssistantMessageEvent, model: ModelLike, apiKey?: string) => void
+  observeEvent?: (
+    event: AssistantMessageEvent,
+    model: ModelLike,
+    apiKey?: string,
+    performance?: RequestPerformance,
+  ) => void
+  resolveOptions?: (model: ModelLike, options?: StreamOptions) => Promise<StreamOptions | undefined>
+  now?: () => number
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -54,20 +62,7 @@ async function isUpgradeRequired(response: Response): Promise<boolean> {
 export function createCommandCodeTransportRouter(deps: TransportDependencies) {
   let transport: CommandCodeTransport = "unknown"
   let apiKey: string | undefined
-
-  function pipe(
-    source: AssistantMessageEventStreamLike,
-    target: AssistantMessageEventStreamLike,
-    model: ModelLike,
-    apiKey?: string,
-  ): Promise<void> {
-    return (async () => {
-      for await (const event of source) {
-        target.push(event)
-        deps.observeEvent?.(event, model, apiKey)
-      }
-    })()
-  }
+  const now = deps.now ?? Date.now
 
   return {
     getTransport(): CommandCodeTransport {
@@ -90,26 +85,61 @@ export function createCommandCodeTransportRouter(deps: TransportDependencies) {
       }
       const requestApiKey = options?.apiKey
       const output = deps.createStream()
-      let upgradeRequired = false
-      const fetchImpl = options?.fetch ?? fetch
-      const providerOptions: StreamOptions = {
-        ...options,
-        fetch: async (input, init) => {
-          const response = await fetchImpl(input, init)
-          if (deps.allowLegacyGenerate && (await isUpgradeRequired(response))) {
-            upgradeRequired = true
-          }
-          return response
-        },
-        onResponse: async (response, responseModel) => {
-          if (upgradeRequired) return
-          await options?.onResponse?.(response, responseModel)
-        },
-      }
 
       const run = async () => {
+        const resolvedOptions = (await deps.resolveOptions?.(model, options)) ?? options
+        const resolvedApiKey = resolvedOptions?.apiKey
+        const performance: RequestPerformance = { startedAt: now() }
+        const observe = (event: AssistantMessageEvent): void => {
+          if (
+            performance.firstTokenAt === undefined &&
+            (event.type === "text_delta" || event.type === "thinking_delta") &&
+            event.delta
+          ) {
+            performance.firstTokenAt = now()
+          }
+          if (event.type === "done" || event.type === "error") {
+            performance.completedAt = now()
+            performance.totalDurationMs = Math.max(
+              0,
+              performance.completedAt - performance.startedAt,
+            )
+            if (performance.firstTokenAt !== undefined) {
+              performance.ttftMs = Math.max(0, performance.firstTokenAt - performance.startedAt)
+              performance.generationDurationMs = Math.max(
+                1,
+                performance.completedAt - performance.firstTokenAt,
+              )
+              const message = event.type === "done" ? event.message : event.error
+              performance.tps = calculateTps(message.usage.output, performance.generationDurationMs)
+            }
+          }
+          deps.observeEvent?.(event, model, resolvedApiKey, performance)
+        }
+        const pipe = async (source: AssistantMessageEventStreamLike): Promise<void> => {
+          for await (const event of source) {
+            output.push(event)
+            observe(event)
+          }
+        }
+        let upgradeRequired = false
+        const fetchImpl = resolvedOptions?.fetch ?? fetch
+        const providerOptions: StreamOptions = {
+          ...resolvedOptions,
+          fetch: async (input, init) => {
+            const response = await fetchImpl(input, init)
+            if (deps.allowLegacyGenerate && (await isUpgradeRequired(response))) {
+              upgradeRequired = true
+            }
+            return response
+          },
+          onResponse: async (response, responseModel) => {
+            if (upgradeRequired) return
+            await resolvedOptions?.onResponse?.(response, responseModel)
+          },
+        }
         if (transport === "generate") {
-          await pipe(deps.streamGenerate(model, context, options), output, model, requestApiKey)
+          await pipe(deps.streamGenerate(model, context, resolvedOptions))
           output.end()
           return
         }
@@ -119,20 +149,20 @@ export function createCommandCodeTransportRouter(deps: TransportDependencies) {
           if (!upgradeRequired) {
             if (apiKey === requestApiKey) transport = "provider"
             output.push(event)
-            deps.observeEvent?.(event, model, requestApiKey)
+            observe(event)
           }
         }
 
         if (upgradeRequired) {
           if (apiKey === requestApiKey) transport = "generate"
-          await pipe(deps.streamGenerate(model, context, options), output, model, requestApiKey)
+          await pipe(deps.streamGenerate(model, context, resolvedOptions))
         }
         output.end()
       }
 
       run().catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error)
-        output.push({
+        const event: AssistantMessageEvent = {
           type: "error",
           reason: "error",
           error: {
@@ -153,7 +183,9 @@ export function createCommandCodeTransportRouter(deps: TransportDependencies) {
             errorMessage: message,
             timestamp: Date.now(),
           },
-        })
+        }
+        output.push(event)
+        deps.observeEvent?.(event, model, requestApiKey)
         output.end()
       })
 

@@ -97,6 +97,7 @@ describe("quota analytics", () => {
       accounts: [account],
       snapshots: { [account.id]: [snapshot] },
       telemetry: [],
+      routerLeases: [],
     }
     const result = dashboardData(database, "24h")
 
@@ -119,6 +120,7 @@ describe("quota analytics", () => {
       accounts: [account],
       snapshots: { [account.id]: [withoutTelemetry] },
       telemetry: [],
+      routerLeases: [],
     }
 
     expect(dashboardData(database, "24h").totals.cacheHitRate).toBeNull()
@@ -137,6 +139,7 @@ describe("quota analytics", () => {
       accounts: [account],
       snapshots: { [account.id]: [zeroHits] },
       telemetry: [],
+      routerLeases: [],
     }
 
     expect(dashboardData(database, "24h").totals.cacheHitRate).toBe(0)

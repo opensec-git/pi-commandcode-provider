@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 
+import type { RequestPerformance } from "./metrics.ts"
 import type { AssistantMessageEvent, AssistantMessageLike, ModelLike } from "./types.ts"
 
 const DEFAULT_TIMEOUT_MS = 2_500
@@ -29,7 +30,12 @@ function keyFingerprint(apiKey: string): string {
 }
 
 export interface QuotaBoardReporter {
-  observe(event: AssistantMessageEvent, model: ModelLike, apiKey?: string): void
+  observe(
+    event: AssistantMessageEvent,
+    model: ModelLike,
+    apiKey?: string,
+    performance?: RequestPerformance,
+  ): void
 }
 
 export function createQuotaBoardReporter(
@@ -43,11 +49,12 @@ export function createQuotaBoardReporter(
   const token = env.COMMANDCODE_QUOTA_BOARD_TOKEN?.trim()
 
   return {
-    observe(event, model, apiKey) {
+    observe(event, model, apiKey, performance) {
       const message = terminalMessage(event)
       if (!message || !apiKey || apiKey.startsWith("$")) return
       const status = event.type === "done" ? "completed" : "failed"
       const usage = message.usage
+      const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite
       void fetchImpl(endpoint, {
         method: "POST",
         headers: {
@@ -62,7 +69,13 @@ export function createQuotaBoardReporter(
           outputTokens: usage.output,
           cacheReadTokens: usage.cacheRead,
           cacheWriteTokens: usage.cacheWrite,
+          cacheHitRate: promptTokens > 0 ? usage.cacheRead / promptTokens : 0,
           cost: usage.cost.total,
+          costSource: "commandcode-price-estimate",
+          totalDurationMs: performance?.totalDurationMs,
+          generationDurationMs: performance?.generationDurationMs,
+          ttftMs: performance?.ttftMs,
+          tps: performance?.tps,
           status,
         }),
         signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),

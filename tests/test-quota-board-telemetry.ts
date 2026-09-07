@@ -50,7 +50,15 @@ const reporter = createQuotaBoardReporter(
   fetchImpl,
 )
 assert.ok(reporter)
-reporter.observe(event, model, "cmd_test_provider_key")
+reporter.observe(event, model, "cmd_test_provider_key", {
+  startedAt: 1_000,
+  firstTokenAt: 1_250,
+  completedAt: 3_250,
+  totalDurationMs: 2_250,
+  generationDurationMs: 2_000,
+  ttftMs: 250,
+  tps: 100,
+})
 
 const captured = await request
 assert.equal(String(captured.input), "http://127.0.0.1:8787/api/telemetry")
@@ -63,6 +71,10 @@ assert.match(String(body.keyFingerprint), /^key_••••_[a-f0-9]{8}$/)
 assert.equal(body.model, model.id)
 assert.equal(body.cacheReadTokens, 400)
 assert.equal(body.cacheWriteTokens, 25)
+assert.equal(body.cacheHitRate, 400 / 1_425)
+assert.equal(body.tps, 100)
+assert.equal(body.ttftMs, 250)
+assert.equal(body.costSource, "commandcode-price-estimate")
 assert.equal(body.status, "completed")
 assert.equal(JSON.stringify(body).includes("cmd_test_provider_key"), false)
 
