@@ -79,6 +79,9 @@ jobs:
   # ──────────────────────────────────────────────────────────
   codeql:
     name: CodeQL SAST
+    # GitHub rejects CodeQL uploads for private repositories that do not have
+    # Advanced Security. Semgrep remains the mandatory private-repo SAST job.
+    if: github.event.repository.visibility == 'public'
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -86,12 +89,12 @@ jobs:
       security-events: write
     steps:
       - uses: actions/checkout@v4
-      - uses: github/codeql-action/init@v3
+      - uses: github/codeql-action/init@v4
         with:
           languages: javascript-typescript
           queries: +security-extended,security-and-quality
-      - uses: github/codeql-action/autobuild@v3
-      - uses: github/codeql-action/analyze@v3
+      - uses: github/codeql-action/autobuild@v4
+      - uses: github/codeql-action/analyze@v4
 
   # ──────────────────────────────────────────────────────────
   # Custom static analysis — pi extension attack patterns
@@ -109,12 +112,19 @@ jobs:
       - name: Run Semgrep with custom rules
         run: |
           semgrep --config .semgrep/ --error --output semgrep-report.sarif --sarif .
-      - name: Upload SARIF
-        uses: github/codeql-action/upload-sarif@v3
+      - name: Preserve Semgrep SARIF
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-report
+          path: semgrep-report.sarif
+        if: always()
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: semgrep-report.sarif
           category: semgrep-pi-audit
-        if: always()
+        # Private repositories need GitHub Advanced Security for SARIF upload.
+        if: always() && github.event.repository.visibility == 'public'
 
   # ──────────────────────────────────────────────────────────
   # Hardcoded secrets detection
@@ -126,10 +136,23 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - name: Install Gitleaks CLI
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_ENABLE_COMMENTS: "true"
+          GITLEAKS_VERSION: 8.30.1
+        run: |
+          curl --fail --silent --show-error --location \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            --output "/tmp/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl --fail --silent --show-error --location \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_checksums.txt" \
+            --output /tmp/gitleaks-checksums.txt
+          grep "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" /tmp/gitleaks-checksums.txt \
+            | (cd /tmp && sha256sum --check)
+          tar --extract --gzip \
+            --file "/tmp/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            --directory /tmp gitleaks
+      - name: Scan repository history
+        run: /tmp/gitleaks git --redact --verbose
 
   # ──────────────────────────────────────────────────────────
   # Dependency supply-chain security

@@ -7,6 +7,7 @@ const EMPTY_DATABASE: DatabaseShape = {
   accounts: [],
   snapshots: {},
   telemetry: [],
+  routerLeases: [],
 }
 
 export class JsonStore {
@@ -32,7 +33,7 @@ export class JsonStore {
     if (parsed.version !== 1 || !Array.isArray(parsed.accounts)) {
       throw new Error("Unsupported quota board data format")
     }
-    return parsed
+    return { ...parsed, routerLeases: parsed.routerLeases ?? [] }
   }
 
   async update(mutator: (database: DatabaseShape) => void): Promise<DatabaseShape> {

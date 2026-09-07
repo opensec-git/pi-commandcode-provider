@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add sticky OpenSec key leases that keep generation traffic direct to CommandCode, avoid timer-based renewal, and rotate once only after an upstream authentication, quota, credit, or rate-limit failure.
+- Add `/commandcode-metrics` and footer telemetry for estimated cost, weighted cache hit rate, TTFT, and weighted/average output TPS, matching the metric definitions used by `pi-openrouter` where CommandCode exposes equivalent data.
+- Forward the measured timing and cache fields with lease telemetry while preventing duplicate generic telemetry for routed requests.
 - Add CommandCode Quota Board, a local-first multi-account dashboard for rolling quotas, account identity, aggregate usage, model mix, and cache efficiency, with encrypted key storage and automatic opt-in telemetry from Pi.
 
 ## 1.0.0 - 2026-09-04

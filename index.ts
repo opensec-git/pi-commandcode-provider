@@ -20,6 +20,8 @@ import { getConfiguredApiKey } from "./src/api-key.ts"
 import { pickCommandCodeApiKey } from "./src/converters.ts"
 import { createStreamCommandCode } from "./src/core.ts"
 import { calculateCommandCodeCost } from "./src/cost.ts"
+import { CommandCodeKeyLeaseManager } from "./src/key-lease.ts"
+import { CommandCodeMetricsTracker, registerCommandCodeMetrics } from "./src/metrics.ts"
 import {
   apiForModelId,
   baseUrlForModel,
@@ -88,6 +90,10 @@ function registerCompatApiProvider(stream: CompatStreamFunction): void {
  * compat registry: pi exports it, OMP does not.
  */
 function providerApiKey(): string | undefined {
+  const routerToken = process.env.OPENSEC_ROUTER_URL
+    ? process.env.OPENSEC_ROUTER_TOKEN?.trim()
+    : undefined
+  if (routerToken) return routerToken
   const configured = pickCommandCodeApiKey(getConfiguredApiKey(), undefined)
   if (configured) return configured
   return compatApiProviderRegistrar() ? "$COMMAND_CODE_API_KEY" : undefined
@@ -166,6 +172,8 @@ export default async function (pi: ExtensionAPI) {
     apiBase: legacyApiBase(apiBase),
   })
   const quotaBoardReporter = createQuotaBoardReporter()
+  const keyLeaseManager = new CommandCodeKeyLeaseManager()
+  const metricsTracker = new CommandCodeMetricsTracker()
   const resolveStreamOptions = (
     options?: Parameters<typeof streamNativeProvider>[2],
   ): Parameters<typeof streamNativeProvider>[2] => {
@@ -176,7 +184,17 @@ export default async function (pi: ExtensionAPI) {
   const transport = createCommandCodeTransportRouter({
     allowLegacyGenerate: process.env.COMMANDCODE_ENABLE_LEGACY_GO === "1",
     createStream: () => new AssistantMessageEventStream(),
-    observeEvent: quotaBoardReporter?.observe,
+    resolveOptions: keyLeaseManager.enabled
+      ? async (model, options) => keyLeaseManager.resolve(model, resolveStreamOptions(options))
+      : undefined,
+    observeEvent: (event, model, apiKey, performance) => {
+      metricsTracker.observe(event, model, performance)
+      if (keyLeaseManager.enabled) {
+        keyLeaseManager.observe(event, model, apiKey, performance)
+      } else {
+        quotaBoardReporter?.observe(event, model, apiKey, performance)
+      }
+    },
     streamProvider: (model, context, options) =>
       streamNativeProvider(
         { ...model, api: apiForModelId(model.id), compat: model.compatConfig ?? model.compat },
@@ -199,6 +217,7 @@ export default async function (pi: ExtensionAPI) {
   registerCompatApiProvider(compatStream)
 
   pi.on("message_end", async (event, ctx) => {
+    metricsTracker.attachUi(ctx.ui)
     if (event.message.role !== "assistant") return
     const normalized = normalizeCommandCodeMessage(event.message, ctx.model?.provider)
     return normalized ? { message: normalized.message } : undefined
@@ -208,6 +227,7 @@ export default async function (pi: ExtensionAPI) {
     apiBase: legacyApiBase(apiBase),
     headers: commandCodeHeaders(),
   })
+  registerCommandCodeMetrics(pi, metricsTracker)
 
   const runtime = createCommandCodeRuntime<ProviderConfig, ExtensionCommandContext>(pi, {
     endpoint: modelsUrl,
@@ -225,6 +245,7 @@ export default async function (pi: ExtensionAPI) {
   })
 
   pi.on("session_shutdown", () => {
+    metricsTracker.detachUi()
     runtime.dispose()
   })
 

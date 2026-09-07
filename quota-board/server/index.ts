@@ -6,6 +6,7 @@ import { z } from "zod"
 import type { RangeKey, UsageSnapshot } from "../src/types"
 import { dashboardData, telemetryFor } from "./analytics"
 import { CommandCodeRequestError, ENDPOINTS, fetchAccountSnapshot } from "./commandcode"
+import { activeLeaseFor, rankAccounts } from "./router"
 import { JsonStore } from "./store"
 import type { StoredAccount, TelemetryEvent } from "./types"
 import { decryptSecret, encryptSecret, keyFingerprint, loadMasterKey } from "./vault"
@@ -51,12 +52,41 @@ const telemetryInput = z
     outputTokens: z.number().int().nonnegative(),
     cacheReadTokens: z.number().int().nonnegative().default(0),
     cacheWriteTokens: z.number().int().nonnegative().default(0),
+    cacheHitRate: z.number().min(0).max(1).optional(),
     cost: z.number().nonnegative().default(0),
+    costSource: z.literal("commandcode-price-estimate").optional(),
+    totalDurationMs: z.number().nonnegative().optional(),
+    generationDurationMs: z.number().nonnegative().optional(),
+    ttftMs: z.number().nonnegative().optional(),
+    tps: z.number().nonnegative().optional(),
     status: z.enum(["completed", "failed"]).default("completed"),
   })
   .refine((value) => Boolean(value.accountId || value.keyFingerprint), {
     message: "accountId or keyFingerprint is required",
   })
+
+const leaseInput = z.object({
+  sessionId: z.string().trim().min(1).max(200),
+  model: z.string().trim().min(1).max(200),
+  forceRotate: z.boolean().optional().default(false),
+  excludeAccountId: z.string().uuid().optional(),
+})
+
+const leaseUsageInput = z.object({
+  model: z.string().trim().min(1).max(200),
+  inputTokens: z.number().int().nonnegative().default(0),
+  outputTokens: z.number().int().nonnegative().default(0),
+  cacheReadTokens: z.number().int().nonnegative().default(0),
+  cacheWriteTokens: z.number().int().nonnegative().default(0),
+  cacheHitRate: z.number().min(0).max(1).optional(),
+  cost: z.number().nonnegative().default(0),
+  costSource: z.literal("commandcode-price-estimate").optional(),
+  totalDurationMs: z.number().nonnegative().optional(),
+  generationDurationMs: z.number().nonnegative().optional(),
+  ttftMs: z.number().nonnegative().optional(),
+  tps: z.number().nonnegative().optional(),
+  status: z.enum(["completed", "failed"]).default("completed"),
+})
 
 function safeMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : "Unexpected error"
@@ -70,7 +100,42 @@ function findAccount(accounts: StoredAccount[], id: string): StoredAccount {
 }
 
 function constantTimeEqual(left: string, right: string): boolean {
-  return timingSafeEqual(createHash("sha256").update(left).digest(), createHash("sha256").update(right).digest())
+  return timingSafeEqual(
+    createHash("sha256").update(left).digest(),
+    createHash("sha256").update(right).digest(),
+  )
+}
+
+function requireRouterAuthorization(request: express.Request): void {
+  const configured = process.env.OPENSEC_ROUTER_TOKEN
+  const supplied = request.header("authorization")?.replace(/^Bearer\s+/i, "") ?? ""
+  if (!configured || !supplied || !constantTimeEqual(supplied, configured)) {
+    throw new AppError("Router access is not authorized", 401)
+  }
+}
+
+function leaseResponse(
+  account: StoredAccount,
+  lease: {
+    id: string
+    sessionId: string
+    accountId: string
+    model: string
+    issuedAt: string
+    expiresAt: string
+  },
+  apiKey: string,
+) {
+  return {
+    leaseId: lease.id,
+    sessionId: lease.sessionId,
+    accountId: lease.accountId,
+    model: lease.model,
+    apiKey,
+    keyFingerprint: account.keyFingerprint,
+    issuedAt: lease.issuedAt,
+    expiresAt: lease.expiresAt,
+  }
 }
 
 function authorizeKeyExport(request: express.Request): "enabled" | "disabled" | "denied" {
@@ -239,7 +304,8 @@ app.post("/api/accounts/:id/refresh", async (request, response, next) => {
 app.post("/api/accounts/:id/key", async (request, response, next) => {
   try {
     const authorization = authorizeKeyExport(request)
-    if (authorization === "disabled") throw new AppError("API key copying is disabled on this server", 403)
+    if (authorization === "disabled")
+      throw new AppError("API key copying is disabled on this server", 403)
     if (authorization === "denied") throw new AppError("Invalid key export token", 401)
     const id = z.string().uuid().parse(request.params.id)
     const account = findAccount((await store.read()).accounts, id)
@@ -271,8 +337,105 @@ app.delete("/api/accounts/:id", async (request, response, next) => {
       database.accounts = database.accounts.filter((account) => account.id !== id)
       delete database.snapshots[id]
       database.telemetry = database.telemetry.filter((event) => event.accountId !== id)
+      database.routerLeases = database.routerLeases.filter((lease) => lease.accountId !== id)
     })
     response.status(204).end()
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post("/api/router/lease", async (request, response, next) => {
+  try {
+    requireRouterAuthorization(request)
+    const input = leaseInput.parse(request.body)
+    const database = await store.read()
+    const currentLease = activeLeaseFor(database.routerLeases, input.sessionId)
+    const existing = input.forceRotate ? undefined : currentLease
+    if (existing) {
+      const account = findAccount(database.accounts, existing.accountId)
+      response.set({
+        "Cache-Control": "private, no-store, max-age=0",
+        Pragma: "no-cache",
+        "X-Content-Type-Options": "nosniff",
+      })
+      response.json(
+        leaseResponse(account, existing, decryptSecret(account.encryptedKey, masterKey)),
+      )
+      return
+    }
+
+    const selected = rankAccounts(database, input.excludeAccountId ?? currentLease?.accountId)[0]
+    if (!selected) throw new AppError("No CommandCode account has usable quota headroom", 503)
+    const now = Date.now()
+    const issuedAt = new Date(now).toISOString()
+    const lease = {
+      id: randomUUID(),
+      sessionId: input.sessionId,
+      accountId: selected.account.id,
+      model: input.model,
+      issuedAt,
+      // The client does not renew on a timer. This is a retention/revocation
+      // horizon, not a signal to interrupt or re-key an active Pi session.
+      expiresAt: new Date(now + 30 * 86_400_000).toISOString(),
+      lastUsedAt: issuedAt,
+      status: "active" as const,
+    }
+    const updated = await store.update((current) => {
+      for (const item of current.routerLeases) {
+        if (item.sessionId === input.sessionId && item.status === "active") item.status = "rotated"
+      }
+      current.routerLeases.push(lease)
+      current.routerLeases = current.routerLeases
+        .filter((item) => Date.parse(item.lastUsedAt) > now - 30 * 86_400_000)
+        .slice(-20_000)
+    })
+    const account = findAccount(updated.accounts, selected.account.id)
+    response.set({
+      "Cache-Control": "private, no-store, max-age=0",
+      Pragma: "no-cache",
+      "X-Content-Type-Options": "nosniff",
+    })
+    response.json(leaseResponse(account, lease, decryptSecret(account.encryptedKey, masterKey)))
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post("/api/router/leases/:id/usage", async (request, response, next) => {
+  try {
+    requireRouterAuthorization(request)
+    const id = z.string().uuid().parse(request.params.id)
+    const input = leaseUsageInput.parse(request.body)
+    const database = await store.read()
+    const lease = database.routerLeases.find((item) => item.id === id)
+    if (!lease) throw new AppError("Lease not found", 404)
+    const event: TelemetryEvent = {
+      id: randomUUID(),
+      accountId: lease.accountId,
+      occurredAt: new Date().toISOString(),
+      model: input.model,
+      inputTokens: input.inputTokens,
+      outputTokens: input.outputTokens,
+      cacheReadTokens: input.cacheReadTokens,
+      cacheWriteTokens: input.cacheWriteTokens,
+      cacheHitRate: input.cacheHitRate,
+      cost: input.cost,
+      costSource: input.costSource,
+      totalDurationMs: input.totalDurationMs,
+      generationDurationMs: input.generationDurationMs,
+      ttftMs: input.ttftMs,
+      tps: input.tps,
+      status: input.status,
+    }
+    await store.update((current) => {
+      const currentLease = current.routerLeases.find((item) => item.id === id)
+      if (currentLease) currentLease.lastUsedAt = event.occurredAt
+      current.telemetry.push(event)
+      current.telemetry = current.telemetry.slice(-100_000)
+    })
+    response.status(202).json({ id: event.id })
+    void refreshAccount(lease.accountId).catch(() => undefined)
   } catch (error) {
     next(error)
   }
@@ -308,7 +471,13 @@ app.post("/api/telemetry", async (request, response, next) => {
       outputTokens: input.outputTokens,
       cacheReadTokens: input.cacheReadTokens,
       cacheWriteTokens: input.cacheWriteTokens,
+      cacheHitRate: input.cacheHitRate,
       cost: input.cost,
+      costSource: input.costSource,
+      totalDurationMs: input.totalDurationMs,
+      generationDurationMs: input.generationDurationMs,
+      ttftMs: input.ttftMs,
+      tps: input.tps,
       status: input.status,
     }
     await store.update((current) => {

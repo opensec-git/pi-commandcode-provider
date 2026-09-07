@@ -188,6 +188,8 @@ Displayed costs are estimates. CommandCode's usage page remains authoritative fo
 | `COMMANDCODE_ENABLE_LEGACY_GO=1` | disabled              | Explicitly enable the undocumented Go-plan fallback                   |
 | `COMMANDCODE_QUOTA_BOARD_URL`    | disabled              | Send final Pi usage to a running local Quota Board                    |
 | `COMMANDCODE_QUOTA_BOARD_TOKEN`  | —                     | Bearer token for a non-loopback Quota Board                           |
+| `OPENSEC_ROUTER_URL`             | disabled              | Lease a sticky CommandCode key from an OpenSec control plane          |
+| `OPENSEC_ROUTER_TOKEN`           | provider credential   | Master token used only to obtain and rotate a leased key              |
 
 Legacy aliases `COMMANDCODE_API_KEY`, `COMMANDCODE_ZDR`, and existing auth-file shapes remain accepted for migration compatibility.
 
@@ -202,6 +204,34 @@ export COMMANDCODE_QUOTA_BOARD_URL="http://127.0.0.1:8787"
 ```
 
 The provider sends a one-way, best-effort usage event after each completed or failed request. It sends a short hash fingerprint—not the API key—so the board can match the event to an account already connected there. Dashboard availability never delays or breaks a Pi response.
+
+### Sticky multi-account leases
+
+The Quota Board can also act as a lightweight key control plane. Pi obtains one CommandCode key for the active session, then sends requests and streams responses **directly between Pi and CommandCode**:
+
+```bash
+export OPENSEC_ROUTER_URL="https://cc.opensec.in"
+export OPENSEC_ROUTER_TOKEN="<master router token>"
+```
+
+The first request for a Pi session obtains the eligible account with the highest safe remaining quota across its 5-hour, weekly, and monthly limits. The assignment stays in process memory for the entire session. There is no five-minute renewal, polling loop, or control-plane request between successful prompts. If CommandCode rejects the assigned key with an authentication, credit, quota, or rate-limit response, the provider requests one replacement lease, excludes the failed account, and retries the request once with the new key.
+
+The control plane is therefore outside the generation data path. It sees lease metadata and asynchronous final usage, but prompts, tool calls, streamed tokens, and responses do not pass through it. Because Pi receives the upstream key, use this mode only on a trusted Pi host and always connect to the control plane over TLS.
+
+### Cost, cache, TTFT, and TPS
+
+The provider measures each direct CommandCode stream and exposes a running summary with:
+
+```text
+/commandcode-metrics
+```
+
+- **Weighted cache hit:** cache-read tokens divided by all prompt-side tokens (`new input + cache read + cache write`).
+- **Weighted TPS:** output tokens divided by summed generation time, measured from the first text/reasoning token through completion.
+- **TTFT:** time from starting the direct provider request to its first text/reasoning token.
+- **Estimated cost:** Pi token usage multiplied by this package's reviewed CommandCode pricing overlay.
+
+The Pi footer shows the running estimated cost, weighted cache hit, and weighted TPS. When a lease is active, the same measurements are reported asynchronously against that lease. CommandCode does not expose an OpenRouter-style per-generation reconciliation endpoint, so the package labels pricing as estimated instead of presenting it as an exact provider charge.
 
 ## Legacy Go mode
 

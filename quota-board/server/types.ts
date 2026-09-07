@@ -29,7 +29,24 @@ export interface TelemetryEvent {
   cacheReadTokens: number
   cacheWriteTokens: number
   cost: number
+  costSource?: "commandcode-price-estimate"
+  cacheHitRate?: number
+  totalDurationMs?: number
+  generationDurationMs?: number
+  ttftMs?: number
+  tps?: number
   status: "completed" | "failed"
+}
+
+export interface RouterLease {
+  id: string
+  sessionId: string
+  accountId: string
+  model: string
+  issuedAt: string
+  expiresAt: string
+  lastUsedAt: string
+  status: "active" | "rotated" | "released"
 }
 
 export interface DatabaseShape {
@@ -37,6 +54,7 @@ export interface DatabaseShape {
   accounts: StoredAccount[]
   snapshots: Record<string, UsageSnapshot[]>
   telemetry: TelemetryEvent[]
+  routerLeases: RouterLease[]
 }
 
 export interface LiveAccountResult {

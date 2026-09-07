@@ -256,7 +256,7 @@ rules:
       - pattern: process.env.$VAR
       - metavariable-regex:
           metavariable: $VAR
-          regex: "(?!COMMANDCODE_|COMMAND_CODE_|CMD_ZDR|NODE_|PATH|HOME|SHELL|USER|LANG|LC_|TERM|TMPDIR|NIX_).*"
+          regex: "(?!COMMANDCODE_|COMMAND_CODE_|CMD_ZDR|OPENSEC_|QUOTA_BOARD_|NODE_|PATH|HOME|SHELL|USER|LANG|LC_|TERM|TMPDIR|NIX_).*"
     message: >
       Reading unexpected environment variable $VAR. Provider should only
       read documented Command Code or standard runtime variables.
