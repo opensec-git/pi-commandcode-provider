@@ -132,13 +132,15 @@ jobs:
         run: |
           curl --fail --silent --show-error --location \
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-            --output /tmp/gitleaks.tar.gz
+            --output "/tmp/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
           curl --fail --silent --show-error --location \
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_checksums.txt" \
             --output /tmp/gitleaks-checksums.txt
           grep "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" /tmp/gitleaks-checksums.txt \
             | (cd /tmp && sha256sum --check)
-          tar --extract --gzip --file /tmp/gitleaks.tar.gz --directory /tmp gitleaks
+          tar --extract --gzip \
+            --file "/tmp/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            --directory /tmp gitleaks
       - name: Scan repository history
         run: /tmp/gitleaks git --redact --verbose
 
