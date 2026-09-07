@@ -79,6 +79,9 @@ jobs:
   # ──────────────────────────────────────────────────────────
   codeql:
     name: CodeQL SAST
+    # GitHub rejects CodeQL uploads for private repositories that do not have
+    # Advanced Security. Semgrep remains the mandatory private-repo SAST job.
+    if: github.event.repository.visibility == 'public'
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -86,12 +89,12 @@ jobs:
       security-events: write
     steps:
       - uses: actions/checkout@v4
-      - uses: github/codeql-action/init@v3
+      - uses: github/codeql-action/init@v4
         with:
           languages: javascript-typescript
           queries: +security-extended,security-and-quality
-      - uses: github/codeql-action/autobuild@v3
-      - uses: github/codeql-action/analyze@v3
+      - uses: github/codeql-action/autobuild@v4
+      - uses: github/codeql-action/analyze@v4
 
   # ──────────────────────────────────────────────────────────
   # Custom static analysis — pi extension attack patterns
@@ -116,7 +119,7 @@ jobs:
           path: semgrep-report.sarif
         if: always()
       - name: Upload SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: semgrep-report.sarif
           category: semgrep-pi-audit
