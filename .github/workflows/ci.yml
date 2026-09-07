@@ -109,12 +109,19 @@ jobs:
       - name: Run Semgrep with custom rules
         run: |
           semgrep --config .semgrep/ --error --output semgrep-report.sarif --sarif .
-      - name: Upload SARIF
+      - name: Preserve Semgrep SARIF
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-report
+          path: semgrep-report.sarif
+        if: always()
+      - name: Upload SARIF to GitHub Code Scanning
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: semgrep-report.sarif
           category: semgrep-pi-audit
-        if: always()
+        # Private repositories need GitHub Advanced Security for SARIF upload.
+        if: always() && github.event.repository.visibility == 'public'
 
   # ──────────────────────────────────────────────────────────
   # Hardcoded secrets detection
