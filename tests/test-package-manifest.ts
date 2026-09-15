@@ -24,11 +24,11 @@ describe("package manifest", () => {
   it("publishes the maintained fork under its public npm scope", async () => {
     const manifest = await readPackageManifest()
 
-    assert.equal(manifest.name, "@kushalkhemka/pi-commandcode-provider")
+    assert.equal(manifest.name, "pi-commandcode")
     assert.equal(manifest.version, "1.0.0")
     assert.equal(
       manifest.repository?.url,
-      "git+https://github.com/Kushalkhemka/pi-commandcode-provider.git",
+      "git+https://github.com/opensec-git/pi-commandcode-provider.git",
     )
     assert.equal(manifest.publishConfig?.access, "public")
   })
