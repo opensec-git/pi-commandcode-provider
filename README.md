@@ -4,7 +4,7 @@
 
 **Use CommandCode models in Pi through the documented Provider API—with native streaming, tools, reasoning, vision, prompt caching, usage accounting, and resilient model discovery.**
 
-[![npm version](https://img.shields.io/npm/v/pi-commandcode?color=cb3837&logo=npm)](https://www.npmjs.com/package/pi-commandcode)
+[![npm version](https://img.shields.io/npm/v/opensec-pi-commandcode?color=cb3837&logo=npm)](https://www.npmjs.com/package/opensec-pi-commandcode)
 [![CI](https://github.com/opensec-git/pi-commandcode-provider/actions/workflows/ci.yml/badge.svg)](https://github.com/opensec-git/pi-commandcode-provider/actions/workflows/ci.yml)
 [![CommandCode catalog](https://github.com/opensec-git/pi-commandcode-provider/actions/workflows/model-metadata.yml/badge.svg)](https://github.com/opensec-git/pi-commandcode-provider/actions/workflows/model-metadata.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -30,7 +30,7 @@
 ## Install
 
 ```bash
-pi install npm:pi-commandcode
+pi install npm:opensec-pi-commandcode
 ```
 
 Restart Pi or run `/reload`, then authenticate:
@@ -292,7 +292,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for testing expectations and [RELEASE.md]
 
 ```bash
 pi update --extensions
-pi remove npm:pi-commandcode
+pi remove npm:opensec-pi-commandcode
 ```
 
 ## Acknowledgements

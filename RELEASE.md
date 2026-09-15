@@ -28,7 +28,7 @@ If npm asks for browser or OTP auth, run the publish command manually and comple
 Verify the registry state:
 
 ```sh
-npm view pi-commandcode@next version dist-tags --json
+npm view opensec-pi-commandcode@next version dist-tags --json
 ```
 
 Expected:
@@ -45,7 +45,7 @@ Always test from npm, not the local checkout.
 ```sh
 PI_SKIP_VERSION_CHECK=1 \
 pi --no-extensions \
-  -e npm:pi-commandcode@next \
+  -e npm:opensec-pi-commandcode@next \
   --list-models commandcode
 ```
 
@@ -67,7 +67,7 @@ export PI_CODING_AGENT_SESSION_DIR="$PI_CC_TEST_SESSION_DIR"
 export PI_SKIP_VERSION_CHECK=1
 
 pi --no-extensions \
-  -e npm:pi-commandcode@next \
+  -e npm:opensec-pi-commandcode@next \
   --provider commandcode \
   --model deepseek/deepseek-v4-flash
 ```
@@ -102,7 +102,7 @@ Using the same exported temp variables from above:
 
 ```sh
 pi --no-extensions \
-  -e npm:pi-commandcode@next \
+  -e npm:opensec-pi-commandcode@next \
   --no-session \
   -p \
   --provider commandcode \
@@ -171,8 +171,8 @@ The older scoped package already used `v1.0.0` in this repository. Use a package
 ```sh
 git checkout main
 git pull origin main
-git tag -a pi-commandcode-v1.0.0 -m "pi-commandcode 1.0.0"
-git push origin pi-commandcode-v1.0.0
+git tag -a opensec-pi-commandcode-v1.0.0 -m "opensec-pi-commandcode 1.0.0"
+git push origin opensec-pi-commandcode-v1.0.0
 ```
 
 Publish stable locally:
@@ -186,8 +186,8 @@ Publishing is intentionally manual/local; there is no GitHub Actions publish wor
 Verify npm:
 
 ```sh
-npm view pi-commandcode version dist-tags --json
-npm view pi-commandcode@1.0.0 version --json
+npm view opensec-pi-commandcode version dist-tags --json
+npm view opensec-pi-commandcode@1.0.0 version --json
 ```
 
 Expected:
@@ -200,9 +200,9 @@ Expected:
 Comment on the related PR and issue after publishing and pushing:
 
 ```sh
-gh pr comment <number> --body "Shipped in \`pi-commandcode@1.0.0\` / tag \`pi-commandcode-v1.0.0\`."
+gh pr comment <number> --body "Shipped in \`opensec-pi-commandcode@1.0.0\` / tag \`opensec-pi-commandcode-v1.0.0\`."
 
-gh issue comment <number> --body "Shipped in \`pi-commandcode@1.0.0\` / tag \`pi-commandcode-v1.0.0\`."
+gh issue comment <number> --body "Shipped in \`opensec-pi-commandcode@1.0.0\` / tag \`opensec-pi-commandcode-v1.0.0\`."
 ```
 
 Only comment on PRs or issues actually included in the release.
