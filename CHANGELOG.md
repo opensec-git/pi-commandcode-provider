@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.1 — 2026-09-15
+
+- Restore fast SHA-256 identities for the in-memory lease cache. Preserve sticky leases, concurrent acquisition coalescing, background renewal, lease validation, and bounded usage reporting.
+
 ## 1.0.0 (opensec-pi-commandcode) — 2026-09-15
 
 - Publish the maintained OpenSec Pi extension as the unscoped `opensec-pi-commandcode` npm package.
