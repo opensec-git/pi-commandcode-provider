@@ -166,11 +166,13 @@ gh pr merge <number> --squash --delete-branch
 
 After merge, pull `main` and tag locally:
 
+The older scoped package already used `v1.0.0` in this repository. Use a package-specific tag for this unscoped release.
+
 ```sh
 git checkout main
 git pull origin main
-git tag -a v1.0.0 -m "Release 1.0.0"
-git push origin v1.0.0
+git tag -a pi-commandcode-v1.0.0 -m "pi-commandcode 1.0.0"
+git push origin pi-commandcode-v1.0.0
 ```
 
 Publish stable locally:
@@ -198,9 +200,9 @@ Expected:
 Comment on the related PR and issue after publishing and pushing:
 
 ```sh
-gh pr comment <number> --body "Shipped in \`pi-commandcode@1.0.0\` / tag \`v1.0.0\`."
+gh pr comment <number> --body "Shipped in \`pi-commandcode@1.0.0\` / tag \`pi-commandcode-v1.0.0\`."
 
-gh issue comment <number> --body "Shipped in \`pi-commandcode@1.0.0\` / tag \`v1.0.0\`."
+gh issue comment <number> --body "Shipped in \`pi-commandcode@1.0.0\` / tag \`pi-commandcode-v1.0.0\`."
 ```
 
 Only comment on PRs or issues actually included in the release.
