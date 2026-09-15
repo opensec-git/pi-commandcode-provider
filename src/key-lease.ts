@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto"
+import { createHmac, randomBytes } from "node:crypto"
 import { configuredRouterToken, isOpenSecMemberToken, routerBaseUrl } from "./opensec-config.ts"
 import { UsageQueue } from "./usage-queue.ts"
 import type { ModelLike, StreamOptions } from "./types.ts"
@@ -85,11 +85,18 @@ export class CommandCodeKeyLeaseManager {
   private readonly renewalAfter = new Map<string, number>()
   private readonly inFlight = new Map<string, Promise<KeyLease>>()
   private readonly fallbackSession = `pi-${process.pid}-${crypto.randomUUID()}`
+  private readonly cacheKeySecret = randomBytes(32)
 
   constructor(private readonly fetchImpl: typeof fetch = fetch) {}
 
   get enabled(): boolean {
     return this.explicitRouter || isOpenSecMemberToken(this.configuredToken)
+  }
+
+  private cacheKey(token: string, sessionId: string): string {
+    // Member tokens are high-entropy credentials. A per-instance HMAC keeps
+    // their cache identities separate without retaining a reusable digest.
+    return createHmac("sha256", this.cacheKeySecret).update(token).digest("hex") + ":" + sessionId
   }
 
   async resolve(model: ModelLike, options?: StreamOptions): Promise<StreamOptions | undefined> {
@@ -98,7 +105,7 @@ export class CommandCodeKeyLeaseManager {
     if (!token)
       throw new Error("OpenSec routing requires OPENSEC_ROUTER_TOKEN or a configured provider key")
     const sessionId = options?.sessionId || this.fallbackSession
-    const cacheKey = createHash("sha256").update(token).digest("hex") + ":" + sessionId
+    const cacheKey = this.cacheKey(token, sessionId)
     let lease = await this.acquire({ sessionId, model: model.id }, token, options?.signal)
     const fetchImpl = options?.fetch ?? fetch
     const eventId = crypto.randomUUID()
@@ -195,7 +202,7 @@ export class CommandCodeKeyLeaseManager {
     token: string,
     bypassCache: boolean,
   ): Promise<KeyLease> {
-    const cacheKey = createHash("sha256").update(token).digest("hex") + ":" + request.sessionId
+    const cacheKey = this.cacheKey(token, request.sessionId)
     const cached = this.leases.get(cacheKey)
     if (
       request.forceRotate &&
