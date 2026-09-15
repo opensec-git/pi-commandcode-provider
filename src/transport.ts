@@ -93,9 +93,10 @@ export function createCommandCodeTransportRouter(deps: TransportDependencies) {
       }
       const requestApiKey = options?.apiKey
       const output = deps.createStream()
+      let resolvedOptions = options
 
       const run = async () => {
-        const resolvedOptions = (await deps.resolveOptions?.(model, options)) ?? options
+        resolvedOptions = (await deps.resolveOptions?.(model, options)) ?? options
         const resolvedApiKey = resolvedOptions?.apiKey
         let upgradeRequired = false
         const fetchImpl = resolvedOptions?.fetch ?? fetch
@@ -150,7 +151,7 @@ export function createCommandCodeTransportRouter(deps: TransportDependencies) {
 
       run().catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error)
-        output.push({
+        const event: AssistantMessageEvent = {
           type: "error",
           reason: "error",
           error: {
@@ -171,7 +172,15 @@ export function createCommandCodeTransportRouter(deps: TransportDependencies) {
             errorMessage: message,
             timestamp: Date.now(),
           },
-        })
+        }
+        output.push(event)
+        try {
+          if (!resolvedOptions?.onUsageEvent)
+            deps.observeEvent?.(event, model, resolvedOptions?.apiKey)
+          resolvedOptions?.onUsageEvent?.(event)
+        } catch {
+          // Telemetry is best effort; the caller still receives the error event.
+        }
         output.end()
       })
 

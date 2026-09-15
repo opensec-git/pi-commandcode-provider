@@ -80,6 +80,45 @@ describe("Command Code transport router", () => {
     assert.equal(events.at(-1)?.type, "done")
   })
 
+  it("reports synthesized provider failures to the leased usage observer", async () => {
+    const observed: string[] = []
+    const router = createCommandCodeTransportRouter({
+      createStream: createTestEventStream,
+      resolveOptions: async (_model, options) => ({
+        ...options,
+        apiKey: "leased-key",
+        onUsageEvent: (event) => observed.push(event.type),
+      }),
+      streamProvider: () => {
+        throw new Error("provider failed")
+      },
+      streamGenerate: () => completedStream("unused"),
+    })
+    const events = await collectEvents(
+      router.stream(makeModel(), makeContext(), { apiKey: "member" }),
+    )
+    assert.equal(events.at(-1)?.type, "error")
+    assert.deepEqual(observed, ["error"])
+  })
+
+  it("reports option-resolution failures to direct telemetry", async () => {
+    const observed: string[] = []
+    const router = createCommandCodeTransportRouter({
+      createStream: createTestEventStream,
+      resolveOptions: async () => {
+        throw new Error("options failed")
+      },
+      observeEvent: (event) => observed.push(event.type),
+      streamProvider: () => completedStream("unused"),
+      streamGenerate: () => completedStream("unused"),
+    })
+    const events = await collectEvents(
+      router.stream(makeModel(), makeContext(), { apiKey: "direct" }),
+    )
+    assert.equal(events.at(-1)?.type, "error")
+    assert.deepEqual(observed, ["error"])
+  })
+
   it("keeps using the Provider API after a successful request", async () => {
     let providerCalls = 0
     let generateCalls = 0

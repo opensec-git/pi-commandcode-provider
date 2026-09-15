@@ -22,6 +22,30 @@ interface LeaseRequest {
   expectedLeaseId?: string
 }
 
+function parseLease(value: unknown): KeyLease {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new Error("OpenSec router returned an invalid lease")
+  const data = value as Record<string, unknown>
+  const fields = [
+    "leaseId",
+    "sessionId",
+    "accountId",
+    "model",
+    "apiKey",
+    "keyFingerprint",
+    "issuedAt",
+    "expiresAt",
+  ] as const
+  if (fields.some((field) => typeof data[field] !== "string" || !data[field]))
+    throw new Error("OpenSec router returned an invalid lease")
+  if (
+    !Number.isFinite(Date.parse(String(data.issuedAt))) ||
+    !Number.isFinite(Date.parse(String(data.expiresAt)))
+  )
+    throw new Error("OpenSec router returned an invalid lease")
+  return data as unknown as KeyLease
+}
+
 const RENEWAL_WINDOW_MS = 60_000
 
 function joinUrl(base: string, path: string): string {
@@ -238,7 +262,7 @@ export class CommandCodeKeyLeaseManager {
         // The remote error body may echo credentials; never surface it in Pi.
         throw new Error(`OpenSec router request failed (${response.status})`)
       }
-      const lease = (await response.json()) as KeyLease
+      const lease = parseLease(await response.json())
       // A slower renewal must not overwrite a rotation that finished meanwhile.
       const latest = this.leases.get(cacheKey)
       if (latest && latest.leaseId !== cached?.leaseId) return latest

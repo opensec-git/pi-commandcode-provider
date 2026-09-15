@@ -18,6 +18,20 @@ afterEach(() => {
   else process.env.OPENSEC_ROUTER_TOKEN = originalToken
 })
 
+function validLease(fields: Record<string, unknown>): Record<string, unknown> {
+  return {
+    leaseId: "lease",
+    sessionId: "session",
+    accountId: "account",
+    model: "model",
+    apiKey: "upstream",
+    keyFingerprint: "key_••••_fixture",
+    issuedAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 300_000).toISOString(),
+    ...fields,
+  }
+}
+
 describe("OpenSec CommandCode key leasing", () => {
   it("routes saved member tokens without env variables and leaves direct keys untouched", async () => {
     delete process.env.OPENSEC_ROUTER_URL
@@ -28,11 +42,13 @@ describe("OpenSec CommandCode key leasing", () => {
       calls++
       assert.equal(String(input), "https://cc.opensec.in/api/router/lease")
       assert.equal(new Headers(init?.headers).get("authorization"), `Bearer ${token}`)
-      return Response.json({
-        leaseId: "lease",
-        apiKey: "upstream",
-        expiresAt: new Date(Date.now() + 300000).toISOString(),
-      })
+      return Response.json(
+        validLease({
+          leaseId: "lease",
+          apiKey: "upstream",
+          expiresAt: new Date(Date.now() + 300000).toISOString(),
+        }),
+      )
     }
     const manager = new CommandCodeKeyLeaseManager()
     const direct = { apiKey: "user_direct" }
@@ -148,13 +164,15 @@ describe("OpenSec CommandCode key leasing", () => {
       if (String(input).endsWith("/lease")) {
         const id = crypto.randomUUID()
         leases.push(id)
-        return Response.json({
-          leaseId: id,
-          sessionId: "same",
-          accountId: "shared",
-          apiKey: "same-upstream-key",
-          expiresAt: new Date(Date.now() + 300000).toISOString(),
-        })
+        return Response.json(
+          validLease({
+            leaseId: id,
+            sessionId: "same",
+            accountId: "shared",
+            apiKey: "same-upstream-key",
+            expiresAt: new Date(Date.now() + 300000).toISOString(),
+          }),
+        )
       }
       reports.push({ token, events: JSON.parse(String(init?.body)).events })
       return new Response(null, { status: 202 })
@@ -208,12 +226,12 @@ describe("OpenSec CommandCode key leasing", () => {
 
 describe("cache-preserving lease failures", () => {
   function lease(index: number, nearExpiry = false) {
-    return {
+    return validLease({
       leaseId: `lease-${index}`,
       accountId: `account-${index}`,
       apiKey: `key-${index}`,
       expiresAt: new Date(Date.now() + (nearExpiry ? 1000 : 300000)).toISOString(),
-    }
+    })
   }
   function setup() {
     process.env.OPENSEC_ROUTER_URL = "https://router.test"
@@ -364,12 +382,14 @@ describe("OpenSec credential destination boundaries", () => {
         assert.equal(cancelled, true)
         return new Response(null, { status: 503 })
       }
-      return Response.json({
-        leaseId: "first",
-        accountId: "first",
-        apiKey: "fixture",
-        expiresAt: new Date(Date.now() + 300000).toISOString(),
-      })
+      return Response.json(
+        validLease({
+          leaseId: "first",
+          accountId: "first",
+          apiKey: "fixture",
+          expiresAt: new Date(Date.now() + 300000).toISOString(),
+        }),
+      )
     })
     const options = await manager.resolve(makeModel(), {
       sessionId: "cleanup",
@@ -399,6 +419,20 @@ describe("OpenSec credential destination boundaries", () => {
       return true
     })
   })
+  it("rejects incomplete successful leases before caching them", async () => {
+    process.env.OPENSEC_ROUTER_URL = "https://router.test"
+    process.env.OPENSEC_ROUTER_TOKEN = "fixture"
+    let calls = 0
+    const manager = new CommandCodeKeyLeaseManager(async () => {
+      calls++
+      return Response.json(
+        calls === 1 ? { leaseId: "incomplete" } : validLease({ apiKey: "valid" }),
+      )
+    })
+    await assert.rejects(manager.resolve(makeModel(), { sessionId: "validation" }), /invalid lease/)
+    assert.equal((await manager.resolve(makeModel(), { sessionId: "validation" }))?.apiKey, "valid")
+    assert.equal(calls, 2)
+  })
 })
 
 describe("lease retry transport contracts", () => {
@@ -407,12 +441,14 @@ describe("lease retry transport contracts", () => {
     process.env.OPENSEC_ROUTER_TOKEN = "fixture"
     let leases = 0
     const manager = new CommandCodeKeyLeaseManager(async () =>
-      Response.json({
-        leaseId: String(++leases),
-        accountId: String(leases),
-        apiKey: "key-" + leases,
-        expiresAt: new Date(Date.now() + 300000).toISOString(),
-      }),
+      Response.json(
+        validLease({
+          leaseId: String(++leases),
+          accountId: String(leases),
+          apiKey: "key-" + leases,
+          expiresAt: new Date(Date.now() + 300000).toISOString(),
+        }),
+      ),
     )
     const bodies: string[] = []
     const options = await manager.resolve(makeModel(), {
@@ -450,12 +486,14 @@ describe("lease retry transport contracts", () => {
         notify()
         await waiting
       }
-      return Response.json({
-        leaseId: String(id),
-        accountId: String(id),
-        apiKey: "key-" + id,
-        expiresAt: new Date(Date.now() + 300000).toISOString(),
-      })
+      return Response.json(
+        validLease({
+          leaseId: String(id),
+          accountId: String(id),
+          apiKey: "key-" + id,
+          expiresAt: new Date(Date.now() + 300000).toISOString(),
+        }),
+      )
     })
     const provider: typeof fetch = async (_input, init) =>
       new Response("quota", {
