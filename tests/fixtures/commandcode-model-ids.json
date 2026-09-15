@@ -47,6 +47,7 @@
     "Qwen/Qwen3.6-Max-Preview",
     "Qwen/Qwen3.6-Plus",
     "meituan/LongCat-2.0:free",
+    "inclusionai/ling-3.0-flash-sante:free",
     "stepfun/Step-3.7-Flash",
     "stepfun/Step-3.5-Flash",
     "tencent/hy3-paid",
@@ -72,6 +73,6 @@
     "deepseek/deepseek-v4.1-flash"
   ],
   "supplementalVerification": {
-    "2026-09-15": ["deepseek/deepseek-v4.1-flash"]
+    "2026-09-15": ["deepseek/deepseek-v4.1-flash", "inclusionai/ling-3.0-flash-sante:free"]
   }
 }

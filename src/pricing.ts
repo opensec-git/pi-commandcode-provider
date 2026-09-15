@@ -41,6 +41,12 @@ export const MODEL_COSTS: Readonly<Record<string, CommandCodeModelCost>> = {
   // Free models
   "poolside/laguna-s-2.1-free": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   "meituan/LongCat-2.0:free": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  "inclusionai/ling-3.0-flash-sante:free": {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+  },
 
   // Open and open-weight models
   "tencent/hy3-paid": { input: 0.14, output: 0.58, cacheRead: 0.035, cacheWrite: 0 },

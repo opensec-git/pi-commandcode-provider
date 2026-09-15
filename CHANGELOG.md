@@ -5,6 +5,7 @@
 - Publish the maintained OpenSec Pi extension as the unscoped `pi-commandcode` npm package.
 - Consolidate secure router leasing and current DeepSeek V4.1 Flash capabilities in the OpenSec repository.
 - Refresh model metadata from Command Code 1.54.0, including DeepSeek V4.1 Flash reasoning, low/high/max effort, and image support.
+- Cover the newly listed Ling 3.0 Flash Sante free model in pricing and catalog fixtures.
 - Add the documented V4.1 Flash off-peak cost estimate so its telemetry no longer reports zero solely because rates were missing.
 - Add CommandCode Quota Board, a local-first multi-account dashboard for rolling quotas, account identity, aggregate usage, model mix, and cache efficiency, with encrypted key storage and automatic opt-in telemetry from Pi.
 
