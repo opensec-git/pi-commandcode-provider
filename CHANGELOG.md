@@ -1,13 +1,15 @@
 # Changelog
 
-## Unreleased
+## 1.0.0 (pi-commandcode) — 2026-09-15
 
-- Add sticky OpenSec key leases that keep generation traffic direct to CommandCode, avoid timer-based renewal, and rotate once only after an upstream authentication, quota, credit, or rate-limit failure.
-- Add `/commandcode-metrics` and footer telemetry for estimated cost, weighted cache hit rate, TTFT, and weighted/average output TPS, matching the metric definitions used by `pi-openrouter` where CommandCode exposes equivalent data.
-- Forward the measured timing and cache fields with lease telemetry while preventing duplicate generic telemetry for routed requests.
+- Publish the maintained OpenSec Pi extension as the unscoped `pi-commandcode` npm package.
+- Consolidate secure router leasing and current DeepSeek V4.1 Flash capabilities in the OpenSec repository.
+- Refresh model metadata from Command Code 1.54.0, including DeepSeek V4.1 Flash reasoning, low/high/max effort, and image support.
+- Cover the newly listed Ling 3.0 Flash Sante free model in pricing and catalog fixtures.
+- Add the documented V4.1 Flash off-peak cost estimate so its telemetry no longer reports zero solely because rates were missing.
 - Add CommandCode Quota Board, a local-first multi-account dashboard for rolling quotas, account identity, aggregate usage, model mix, and cache efficiency, with encrypted key storage and automatic opt-in telemetry from Pi.
 
-## 1.0.0 - 2026-09-04
+## 1.0.0 (previous scoped package) - 2026-09-04
 
 - Publish the maintained fork as `@kushalkhemka/pi-commandcode-provider` with Pi-first documentation, package metadata, and release verification.
 - Keep the documented Provider API as the default transport and require explicit `COMMANDCODE_ENABLE_LEGACY_GO=1` opt-in before using the unsupported `/alpha/generate` fallback.

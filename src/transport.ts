@@ -5,7 +5,6 @@ import type {
   ModelLike,
   StreamOptions,
 } from "./types.ts"
-import { calculateTps, type RequestPerformance } from "./metrics.ts"
 
 export type CommandCodeTransport = "unknown" | "provider" | "generate"
 
@@ -23,14 +22,8 @@ interface TransportDependencies {
     context: ContextLike,
     options?: StreamOptions,
   ) => AssistantMessageEventStreamLike
-  observeEvent?: (
-    event: AssistantMessageEvent,
-    model: ModelLike,
-    apiKey?: string,
-    performance?: RequestPerformance,
-  ) => void
+  observeEvent?: (event: AssistantMessageEvent, model: ModelLike, apiKey?: string) => void
   resolveOptions?: (model: ModelLike, options?: StreamOptions) => Promise<StreamOptions | undefined>
-  now?: () => number
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -62,7 +55,22 @@ async function isUpgradeRequired(response: Response): Promise<boolean> {
 export function createCommandCodeTransportRouter(deps: TransportDependencies) {
   let transport: CommandCodeTransport = "unknown"
   let apiKey: string | undefined
-  const now = deps.now ?? Date.now
+
+  function pipe(
+    source: AssistantMessageEventStreamLike,
+    target: AssistantMessageEventStreamLike,
+    model: ModelLike,
+    apiKey?: string,
+    onUsageEvent?: StreamOptions["onUsageEvent"],
+  ): Promise<void> {
+    return (async () => {
+      for await (const event of source) {
+        target.push(event)
+        if (!onUsageEvent) deps.observeEvent?.(event, model, apiKey)
+        onUsageEvent?.(event)
+      }
+    })()
+  }
 
   return {
     getTransport(): CommandCodeTransport {
@@ -85,52 +93,19 @@ export function createCommandCodeTransportRouter(deps: TransportDependencies) {
       }
       const requestApiKey = options?.apiKey
       const output = deps.createStream()
+      let resolvedOptions = options
 
       const run = async () => {
-        const resolvedOptions = (await deps.resolveOptions?.(model, options)) ?? options
+        resolvedOptions = (await deps.resolveOptions?.(model, options)) ?? options
         const resolvedApiKey = resolvedOptions?.apiKey
-        const performance: RequestPerformance = { startedAt: now() }
-        const observe = (event: AssistantMessageEvent): void => {
-          if (
-            performance.firstTokenAt === undefined &&
-            (event.type === "text_delta" || event.type === "thinking_delta") &&
-            event.delta
-          ) {
-            performance.firstTokenAt = now()
-          }
-          if (event.type === "done" || event.type === "error") {
-            performance.completedAt = now()
-            performance.totalDurationMs = Math.max(
-              0,
-              performance.completedAt - performance.startedAt,
-            )
-            if (performance.firstTokenAt !== undefined) {
-              performance.ttftMs = Math.max(0, performance.firstTokenAt - performance.startedAt)
-              performance.generationDurationMs = Math.max(
-                1,
-                performance.completedAt - performance.firstTokenAt,
-              )
-              const message = event.type === "done" ? event.message : event.error
-              performance.tps = calculateTps(message.usage.output, performance.generationDurationMs)
-            }
-          }
-          deps.observeEvent?.(event, model, resolvedApiKey, performance)
-        }
-        const pipe = async (source: AssistantMessageEventStreamLike): Promise<void> => {
-          for await (const event of source) {
-            output.push(event)
-            observe(event)
-          }
-        }
         let upgradeRequired = false
         const fetchImpl = resolvedOptions?.fetch ?? fetch
         const providerOptions: StreamOptions = {
           ...resolvedOptions,
           fetch: async (input, init) => {
             const response = await fetchImpl(input, init)
-            if (deps.allowLegacyGenerate && (await isUpgradeRequired(response))) {
+            if (deps.allowLegacyGenerate && (await isUpgradeRequired(response)))
               upgradeRequired = true
-            }
             return response
           },
           onResponse: async (response, responseModel) => {
@@ -139,7 +114,13 @@ export function createCommandCodeTransportRouter(deps: TransportDependencies) {
           },
         }
         if (transport === "generate") {
-          await pipe(deps.streamGenerate(model, context, resolvedOptions))
+          await pipe(
+            deps.streamGenerate(model, context, resolvedOptions),
+            output,
+            model,
+            resolvedApiKey,
+            resolvedOptions?.onUsageEvent,
+          )
           output.end()
           return
         }
@@ -149,13 +130,21 @@ export function createCommandCodeTransportRouter(deps: TransportDependencies) {
           if (!upgradeRequired) {
             if (apiKey === requestApiKey) transport = "provider"
             output.push(event)
-            observe(event)
+            if (!resolvedOptions?.onUsageEvent)
+              deps.observeEvent?.(event, model, resolvedOptions?.apiKey)
+            resolvedOptions?.onUsageEvent?.(event)
           }
         }
 
         if (upgradeRequired) {
           if (apiKey === requestApiKey) transport = "generate"
-          await pipe(deps.streamGenerate(model, context, resolvedOptions))
+          await pipe(
+            deps.streamGenerate(model, context, resolvedOptions),
+            output,
+            model,
+            resolvedOptions?.apiKey,
+            resolvedOptions?.onUsageEvent,
+          )
         }
         output.end()
       }
@@ -185,7 +174,13 @@ export function createCommandCodeTransportRouter(deps: TransportDependencies) {
           },
         }
         output.push(event)
-        deps.observeEvent?.(event, model, requestApiKey)
+        try {
+          if (!resolvedOptions?.onUsageEvent)
+            deps.observeEvent?.(event, model, resolvedOptions?.apiKey)
+          resolvedOptions?.onUsageEvent?.(event)
+        } catch {
+          // Telemetry is best effort; the caller still receives the error event.
+        }
         output.end()
       })
 

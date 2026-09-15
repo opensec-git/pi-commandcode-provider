@@ -62,30 +62,61 @@ function providerStream(
 }
 
 describe("Command Code transport router", () => {
-  it("resolves a leased key and measures direct-stream timing", async () => {
+  it("resolves leased stream options before starting the provider request", async () => {
     let receivedKey: string | undefined
-    let terminalPerformance: { ttftMs?: number; generationDurationMs?: number; tps?: number } = {}
-    const times = [1_000, 1_300, 1_500]
     const router = createCommandCodeTransportRouter({
       createStream: createTestEventStream,
       resolveOptions: async (_model, options) => ({ ...options, apiKey: "leased-key" }),
-      now: () => times.shift() ?? 1_500,
-      observeEvent: (event, _model, _key, performance) => {
-        if (event.type === "done") terminalPerformance = { ...performance }
-      },
       streamProvider: (_model, _context, options) => {
         receivedKey = options?.apiKey
         return completedStream("leased")
       },
       streamGenerate: () => completedStream("unused"),
     })
-
-    await collectEvents(router.stream(makeModel(), makeContext(), { apiKey: "master-key" }))
-
+    const events = await collectEvents(
+      router.stream(makeModel(), makeContext(), { apiKey: "master-key" }),
+    )
     assert.equal(receivedKey, "leased-key")
-    assert.equal(terminalPerformance.ttftMs, 300)
-    assert.equal(terminalPerformance.generationDurationMs, 200)
-    assert.equal(terminalPerformance.tps, 5)
+    assert.equal(events.at(-1)?.type, "done")
+  })
+
+  it("reports synthesized provider failures to the leased usage observer", async () => {
+    const observed: string[] = []
+    const router = createCommandCodeTransportRouter({
+      createStream: createTestEventStream,
+      resolveOptions: async (_model, options) => ({
+        ...options,
+        apiKey: "leased-key",
+        onUsageEvent: (event) => observed.push(event.type),
+      }),
+      streamProvider: () => {
+        throw new Error("provider failed")
+      },
+      streamGenerate: () => completedStream("unused"),
+    })
+    const events = await collectEvents(
+      router.stream(makeModel(), makeContext(), { apiKey: "member" }),
+    )
+    assert.equal(events.at(-1)?.type, "error")
+    assert.deepEqual(observed, ["error"])
+  })
+
+  it("reports option-resolution failures to direct telemetry", async () => {
+    const observed: string[] = []
+    const router = createCommandCodeTransportRouter({
+      createStream: createTestEventStream,
+      resolveOptions: async () => {
+        throw new Error("options failed")
+      },
+      observeEvent: (event) => observed.push(event.type),
+      streamProvider: () => completedStream("unused"),
+      streamGenerate: () => completedStream("unused"),
+    })
+    const events = await collectEvents(
+      router.stream(makeModel(), makeContext(), { apiKey: "direct" }),
+    )
+    assert.equal(events.at(-1)?.type, "error")
+    assert.deepEqual(observed, ["error"])
   })
 
   it("keeps using the Provider API after a successful request", async () => {

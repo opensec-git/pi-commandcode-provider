@@ -1,5 +1,7 @@
-import type { RequestPerformance } from "./metrics.ts"
-import type { AssistantMessageEvent, ModelLike, StreamOptions } from "./types.ts"
+import { createHmac, randomBytes } from "node:crypto"
+import { configuredRouterToken, isOpenSecMemberToken, routerBaseUrl } from "./opensec-config.ts"
+import { UsageQueue } from "./usage-queue.ts"
+import type { ModelLike, StreamOptions } from "./types.ts"
 
 interface KeyLease {
   leaseId: string
@@ -17,168 +19,259 @@ interface LeaseRequest {
   model: string
   forceRotate?: boolean
   excludeAccountId?: string
+  expectedLeaseId?: string
 }
 
-interface LeaseManagerOptions {
-  env?: NodeJS.ProcessEnv
-  fetchImpl?: typeof fetch
-  fallbackSessionId?: string
+function parseLease(value: unknown): KeyLease {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new Error("OpenSec router returned an invalid lease")
+  const data = value as Record<string, unknown>
+  const fields = [
+    "leaseId",
+    "sessionId",
+    "accountId",
+    "model",
+    "apiKey",
+    "keyFingerprint",
+    "issuedAt",
+    "expiresAt",
+  ] as const
+  if (fields.some((field) => typeof data[field] !== "string" || !data[field]))
+    throw new Error("OpenSec router returned an invalid lease")
+  if (
+    !Number.isFinite(Date.parse(String(data.issuedAt))) ||
+    !Number.isFinite(Date.parse(String(data.expiresAt)))
+  )
+    throw new Error("OpenSec router returned an invalid lease")
+  return data as unknown as KeyLease
 }
+
+const RENEWAL_WINDOW_MS = 60_000
 
 function joinUrl(base: string, path: string): string {
   return `${base.replace(/\/+$/, "")}${path}`
 }
 
-async function isRotationFailure(response: Response): Promise<boolean> {
-  if ([401, 402, 429].includes(response.status)) return true
-  if (response.status !== 403) return false
+async function awaitLease<T>(task: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return task
+  let aborted!: () => void
+  try {
+    return await Promise.race([
+      task,
+      new Promise<never>((_resolve, reject) => {
+        aborted = () => reject(signal.reason ?? new DOMException("Aborted", "AbortError"))
+        signal.addEventListener("abort", aborted, { once: true })
+        if (signal.aborted) aborted()
+      }),
+    ])
+  } finally {
+    signal.removeEventListener("abort", aborted)
+  }
+}
+
+function isQuotaFailure(response: Response): Promise<boolean> {
+  if ([401, 402].includes(response.status)) return Promise.resolve(true)
+  if (![403, 429].includes(response.status)) return Promise.resolve(false)
   return response
     .clone()
     .text()
     .then(
-      (body) => /\b(?:quota|credit|rate limit|usage limit|exhausted|invalid api key)\b/i.test(body),
+      // Temporary throttling should use the core's Retry-After/backoff on the
+      // same key. Only an explicit capacity failure justifies losing affinity.
+      (body) =>
+        !/rate[_ -]?limit|too many requests|per[_ -]minute/i.test(body) &&
+        /quota|credits?|usage[_ -]?limit|exhausted|insufficient[_ -]?balance/i.test(body),
       () => false,
     )
 }
 
-function replaceAuthorization(init: RequestInit | undefined, apiKey: string): RequestInit {
-  const headers = new Headers(init?.headers)
+function replaceAuthorization(
+  init: RequestInit | undefined,
+  apiKey: string,
+  input: RequestInfo | URL,
+): RequestInit {
+  const headers = new Headers(
+    init?.headers ?? (input instanceof Request ? input.headers : undefined),
+  )
+  if (headers.has("x-api-key")) headers.set("x-api-key", apiKey)
   headers.set("authorization", `Bearer ${apiKey}`)
   return { ...init, headers }
 }
 
-function terminalMessage(event: AssistantMessageEvent) {
-  if (event.type === "done") return event.message
-  if (event.type === "error") return event.error
-  return undefined
-}
-
 export class CommandCodeKeyLeaseManager {
-  private readonly baseUrl?: string
-  private readonly configuredToken?: string
-  private readonly controlPlaneFetch: typeof fetch
+  private readonly explicitRouter = Boolean(process.env.OPENSEC_ROUTER_URL?.trim())
+  private readonly baseUrl = routerBaseUrl(process.env.OPENSEC_ROUTER_URL?.trim() || undefined)
+  private readonly configuredToken = configuredRouterToken()
   private readonly leases = new Map<string, KeyLease>()
-  private readonly leasesByApiKey = new Map<string, KeyLease>()
-  private readonly leaseTokens = new Map<string, string>()
+  private readonly queue = this.baseUrl
+    ? new UsageQueue(joinUrl(this.baseUrl, "/api/router/usage"))
+    : undefined
+  private readonly renewalAfter = new Map<string, number>()
   private readonly inFlight = new Map<string, Promise<KeyLease>>()
-  private readonly fallbackSession: string
+  private readonly fallbackSession = `pi-${process.pid}-${crypto.randomUUID()}`
+  private readonly cacheKeySecret = randomBytes(32)
 
-  constructor(options: LeaseManagerOptions = {}) {
-    const env = options.env ?? process.env
-    this.baseUrl = env.OPENSEC_ROUTER_URL?.trim()
-    this.configuredToken = env.OPENSEC_ROUTER_TOKEN?.trim()
-    this.controlPlaneFetch = options.fetchImpl ?? fetch
-    this.fallbackSession = options.fallbackSessionId ?? `pi-${process.pid}-${crypto.randomUUID()}`
-  }
+  constructor(private readonly fetchImpl: typeof fetch = fetch) {}
 
   get enabled(): boolean {
-    return Boolean(this.baseUrl)
+    return this.explicitRouter || isOpenSecMemberToken(this.configuredToken)
+  }
+
+  private cacheKey(token: string, sessionId: string): string {
+    // Member tokens are high-entropy credentials. A per-instance HMAC keeps
+    // their cache identities separate without retaining a reusable digest.
+    return createHmac("sha256", this.cacheKeySecret).update(token).digest("hex") + ":" + sessionId
   }
 
   async resolve(model: ModelLike, options?: StreamOptions): Promise<StreamOptions | undefined> {
-    if (!this.baseUrl) return options
     const token = this.configuredToken || options?.apiKey
-    if (!token) {
+    if (!this.explicitRouter && !isOpenSecMemberToken(token)) return options
+    if (!token)
       throw new Error("OpenSec routing requires OPENSEC_ROUTER_TOKEN or a configured provider key")
-    }
     const sessionId = options?.sessionId || this.fallbackSession
-    let lease = await this.acquire({ sessionId, model: model.id }, token)
-    const directFetch = options?.fetch ?? fetch
+    const cacheKey = this.cacheKey(token, sessionId)
+    let lease = await this.acquire({ sessionId, model: model.id }, token, options?.signal)
+    const fetchImpl = options?.fetch ?? fetch
+    const eventId = crypto.randomUUID()
+    let reported = false
     const routed: StreamOptions = {
       ...options,
       apiKey: lease.apiKey,
+      onUsageEvent: (event) => {
+        options?.onUsageEvent?.(event)
+        if (reported || (event.type !== "done" && event.type !== "error")) return
+        reported = true
+        const message = event.type === "done" ? event.message : event.error
+        this.queue?.enqueue(token, {
+          eventId,
+          leaseId: lease.leaseId,
+          occurredAt: new Date().toISOString(),
+          model: model.id,
+          inputTokens: message.usage.input,
+          outputTokens: message.usage.output,
+          cacheReadTokens: message.usage.cacheRead,
+          cacheWriteTokens: message.usage.cacheWrite,
+          cost: message.usage.cost.total,
+          status: event.type === "done" ? "completed" : "failed",
+        })
+      },
       fetch: async (input, init) => {
-        const response = await directFetch(input, init)
-        if (!(await isRotationFailure(response))) return response
-
-        const previous = lease
+        const signals = [
+          init?.signal,
+          input instanceof Request ? input.signal : undefined,
+          options?.signal,
+        ].filter((signal): signal is AbortSignal => Boolean(signal))
+        const signal = signals.length ? AbortSignal.any(signals) : undefined
+        signal?.throwIfAborted()
+        const requestInit = { ...init, signal }
+        // Core retries may retain the original headers, while another request
+        // has already replaced this session's failed key.
+        lease = this.leases.get(cacheKey) ?? lease
+        routed.apiKey = lease.apiKey
+        const attempted = lease
+        let response = await fetchImpl(
+          input instanceof Request ? input.clone() : input,
+          replaceAuthorization(requestInit, attempted.apiKey, input),
+        )
+        if (!(await isQuotaFailure(response))) return response
+        // Core receives only the replacement; release the abandoned response
+        // even if lease allocation subsequently fails.
+        void response.body?.cancel().catch(() => undefined)
         const replacement = await this.acquire(
           {
             sessionId,
             model: model.id,
             forceRotate: true,
-            excludeAccountId: previous.accountId,
+            excludeAccountId: attempted.accountId,
+            expectedLeaseId: attempted.leaseId,
           },
           token,
+          signal,
         )
         lease = replacement
         routed.apiKey = replacement.apiKey
-        // The transport observer still holds the key that began this request.
-        // Point that key at the replacement lease so final usage is attributed
-        // to the account that actually completed the retried request.
-        this.leasesByApiKey.set(previous.apiKey, replacement)
-        return directFetch(input, replaceAuthorization(init, replacement.apiKey))
+        signal?.throwIfAborted()
+        response = await fetchImpl(
+          input instanceof Request ? input.clone() : input,
+          replaceAuthorization(requestInit, replacement.apiKey, input),
+        )
+        return response
       },
     }
     return routed
   }
 
-  observe(
-    event: AssistantMessageEvent,
-    model: ModelLike,
-    apiKey?: string,
-    performance?: RequestPerformance,
-  ): void {
-    const message = terminalMessage(event)
-    if (!message || !apiKey || !this.baseUrl) return
-    const lease = this.leasesByApiKey.get(apiKey)
-    if (!lease) return
-    const token = this.configuredToken || this.leaseTokens.get(lease.leaseId)
-    if (!token) return
-    const usage = message.usage
-    const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite
-    void this.controlPlaneFetch(
-      joinUrl(this.baseUrl, `/api/router/leases/${lease.leaseId}/usage`),
-      {
-        method: "POST",
-        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-        body: JSON.stringify({
-          model: model.id,
-          inputTokens: usage.input,
-          outputTokens: usage.output,
-          cacheReadTokens: usage.cacheRead,
-          cacheWriteTokens: usage.cacheWrite,
-          cacheHitRate: promptTokens > 0 ? usage.cacheRead / promptTokens : 0,
-          cost: usage.cost.total,
-          costSource: "commandcode-price-estimate",
-          totalDurationMs: performance?.totalDurationMs,
-          generationDurationMs: performance?.generationDurationMs,
-          ttftMs: performance?.ttftMs,
-          tps: performance?.tps,
-          status: event.type === "done" ? "completed" : "failed",
-        }),
-        signal: AbortSignal.timeout(5_000),
-      },
-    ).catch(() => undefined)
+  async flushUsage(): Promise<void> {
+    await this.queue?.flush()
+  }
+  async shutdown(): Promise<void> {
+    await this.queue?.shutdown(1500)
+  }
+  get telemetryStats() {
+    return this.queue?.stats
   }
 
-  private async acquire(request: LeaseRequest, token: string): Promise<KeyLease> {
-    const cached = this.leases.get(request.sessionId)
-    // A Pi process keeps its assignment until CommandCode itself rejects the
-    // key. No timer, polling request, or lease renewal runs between prompts.
-    if (!request.forceRotate && cached) return cached
+  private async acquire(
+    request: LeaseRequest,
+    token: string,
+    signal?: AbortSignal,
+  ): Promise<KeyLease> {
+    signal?.throwIfAborted()
+    // Stop this caller promptly without cancelling another caller's shared lease request.
+    return awaitLease(this.acquireInternal(request, token, false), signal)
+  }
+
+  private async acquireInternal(
+    request: LeaseRequest,
+    token: string,
+    bypassCache: boolean,
+  ): Promise<KeyLease> {
+    const cacheKey = this.cacheKey(token, request.sessionId)
+    const cached = this.leases.get(cacheKey)
+    if (
+      request.forceRotate &&
+      cached &&
+      ((request.expectedLeaseId && cached.leaseId !== request.expectedLeaseId) ||
+        (request.excludeAccountId && cached.accountId !== request.excludeAccountId))
+    )
+      return cached
+    if (!request.forceRotate && cached && !bypassCache) {
+      if (
+        Date.parse(cached.expiresAt) <= Date.now() + RENEWAL_WINDOW_MS &&
+        Date.now() >= (this.renewalAfter.get(cacheKey) ?? 0)
+      ) {
+        this.renewalAfter.set(cacheKey, Date.now() + 60_000)
+        void this.acquireInternal(request, token, true).catch(() => undefined)
+      }
+      return cached
+    }
     if (!this.baseUrl) throw new Error("OpenSec router URL is not configured")
-    const requestKey = `${request.sessionId}:${request.forceRotate ? "rotate" : "lease"}`
+    const requestKey = `${cacheKey}:${request.forceRotate ? `rotate:${request.expectedLeaseId ?? request.excludeAccountId ?? ""}` : bypassCache ? "renew" : "lease"}`
     const pending = this.inFlight.get(requestKey)
     if (pending) return pending
     const task = (async () => {
-      const response = await this.controlPlaneFetch(joinUrl(this.baseUrl!, "/api/router/lease"), {
+      const response = await this.fetchImpl(joinUrl(this.baseUrl!, "/api/router/lease"), {
         method: "POST",
         headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
         body: JSON.stringify(request),
         signal: AbortSignal.timeout(10_000),
+        redirect: "error",
       })
       if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as { error?: string } | null
-        throw new Error(body?.error ?? `OpenSec router request failed (${response.status})`)
+        void response.body?.cancel().catch(() => undefined)
+        // The remote error body may echo credentials; never surface it in Pi.
+        throw new Error(`OpenSec router request failed (${response.status})`)
       }
-      const lease = (await response.json()) as KeyLease
-      if (!lease.apiKey || !lease.leaseId || !lease.accountId) {
-        throw new Error("OpenSec router returned an invalid lease")
+      const lease = parseLease(await response.json())
+      // A slower renewal must not overwrite a rotation that finished meanwhile.
+      const latest = this.leases.get(cacheKey)
+      if (latest && latest.leaseId !== cached?.leaseId) return latest
+      if (!this.leases.has(cacheKey) && this.leases.size >= 512) {
+        const oldest = this.leases.keys().next().value!
+        this.leases.delete(oldest)
+        this.renewalAfter.delete(oldest)
       }
-      this.leases.set(request.sessionId, lease)
-      this.leasesByApiKey.set(lease.apiKey, lease)
-      this.leaseTokens.set(lease.leaseId, token)
+      this.leases.set(cacheKey, lease)
       return lease
     })().finally(() => this.inFlight.delete(requestKey))
     this.inFlight.set(requestKey, task)

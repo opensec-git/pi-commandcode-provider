@@ -41,6 +41,12 @@ export const MODEL_COSTS: Readonly<Record<string, CommandCodeModelCost>> = {
   // Free models
   "poolside/laguna-s-2.1-free": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   "meituan/LongCat-2.0:free": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  "inclusionai/ling-3.0-flash-sante:free": {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+  },
 
   // Open and open-weight models
   "tencent/hy3-paid": { input: 0.14, output: 0.58, cacheRead: 0.035, cacheWrite: 0 },
@@ -82,6 +88,13 @@ export const MODEL_COSTS: Readonly<Record<string, CommandCodeModelCost>> = {
     input: 0.22,
     output: 0.66,
     cacheRead: 0.007,
+    cacheWrite: 0,
+  },
+  // V4.1 off-peak display estimate, verified against Command Code pricing 2026-09-15.
+  "deepseek/deepseek-v4.1-flash": {
+    input: 0.15,
+    output: 0.6,
+    cacheRead: 0.003,
     cacheWrite: 0,
   },
   "deepseek/deepseek-v4-flash-fast": {

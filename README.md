@@ -4,9 +4,9 @@
 
 **Use CommandCode models in Pi through the documented Provider API—with native streaming, tools, reasoning, vision, prompt caching, usage accounting, and resilient model discovery.**
 
-[![npm version](https://img.shields.io/npm/v/%40kushalkhemka%2Fpi-commandcode-provider?color=cb3837&logo=npm)](https://www.npmjs.com/package/@kushalkhemka/pi-commandcode-provider)
-[![CI](https://github.com/Kushalkhemka/pi-commandcode-provider/actions/workflows/ci.yml/badge.svg)](https://github.com/Kushalkhemka/pi-commandcode-provider/actions/workflows/ci.yml)
-[![CommandCode catalog](https://github.com/Kushalkhemka/pi-commandcode-provider/actions/workflows/model-metadata.yml/badge.svg)](https://github.com/Kushalkhemka/pi-commandcode-provider/actions/workflows/model-metadata.yml)
+[![npm version](https://img.shields.io/npm/v/pi-commandcode?color=cb3837&logo=npm)](https://www.npmjs.com/package/pi-commandcode)
+[![CI](https://github.com/opensec-git/pi-commandcode-provider/actions/workflows/ci.yml/badge.svg)](https://github.com/opensec-git/pi-commandcode-provider/actions/workflows/ci.yml)
+[![CommandCode catalog](https://github.com/opensec-git/pi-commandcode-provider/actions/workflows/model-metadata.yml/badge.svg)](https://github.com/opensec-git/pi-commandcode-provider/actions/workflows/model-metadata.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 [Install](#install) · [Compatibility](#compatibility) · [Configuration](#configuration) · [Troubleshooting](#troubleshooting) · [Contributing](CONTRIBUTING.md)
@@ -22,7 +22,7 @@
 - **Full agent loops** with incremental tool arguments, reasoning, images, usage, aborts, and retries
 - **Stable prompt-cache routing** using Pi session IDs on OpenAI-compatible requests
 - **Live model discovery** with cache-first startup and background refresh
-- **Current capabilities** synchronized from `command-code@1.47.0`
+- **Current capabilities** synchronized from `command-code@1.54.0`
 - **Explicit pricing coverage** for every model in the current live Provider API catalog
 - **Zero-data-retention header** support through `CMD_ZDR=1`
 - **No runtime dependency bundle**—the extension uses Pi's own core packages
@@ -30,7 +30,7 @@
 ## Install
 
 ```bash
-pi install npm:@kushalkhemka/pi-commandcode-provider
+pi install npm:pi-commandcode
 ```
 
 Restart Pi or run `/reload`, then authenticate:
@@ -177,19 +177,19 @@ Displayed costs are estimates. CommandCode's usage page remains authoritative fo
 
 ## Configuration
 
-| Variable                         | Default               | Description                                                           |
-| -------------------------------- | --------------------- | --------------------------------------------------------------------- |
-| `COMMAND_CODE_API_KEY`           | —                     | Preferred API-key environment variable                                |
-| `CMD_ZDR=1`                      | disabled              | Send CommandCode's documented zero-data-retention header              |
-| `COMMANDCODE_API_BASE`           | Provider API URL      | Override the Provider API base for local tests or compatible gateways |
-| `COMMANDCODE_MODELS_URL`         | `/provider/v1/models` | Override model discovery                                              |
-| `COMMANDCODE_MODELS_CACHE`       | Pi agent directory    | Override the catalog cache path                                       |
-| `COMMANDCODE_MODELS_TIMEOUT_MS`  | `10000`               | Bound model discovery and refresh requests                            |
-| `COMMANDCODE_ENABLE_LEGACY_GO=1` | disabled              | Explicitly enable the undocumented Go-plan fallback                   |
-| `COMMANDCODE_QUOTA_BOARD_URL`    | disabled              | Send final Pi usage to a running local Quota Board                    |
-| `COMMANDCODE_QUOTA_BOARD_TOKEN`  | —                     | Bearer token for a non-loopback Quota Board                           |
-| `OPENSEC_ROUTER_URL`             | disabled              | Lease a sticky CommandCode key from an OpenSec control plane          |
-| `OPENSEC_ROUTER_TOKEN`           | provider credential   | Master token used only to obtain and rotate a leased key              |
+| Variable                         | Default                                                       | Description                                                           |
+| -------------------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `COMMAND_CODE_API_KEY`           | —                                                             | Preferred API-key environment variable                                |
+| `CMD_ZDR=1`                      | disabled                                                      | Send CommandCode's documented zero-data-retention header              |
+| `COMMANDCODE_API_BASE`           | Provider API URL                                              | Override the Provider API base for local tests or compatible gateways |
+| `COMMANDCODE_MODELS_URL`         | `/provider/v1/models`                                         | Override model discovery                                              |
+| `COMMANDCODE_MODELS_CACHE`       | Pi agent directory                                            | Override the catalog cache path                                       |
+| `COMMANDCODE_MODELS_TIMEOUT_MS`  | `10000`                                                       | Bound model discovery and refresh requests                            |
+| `COMMANDCODE_ENABLE_LEGACY_GO=1` | disabled                                                      | Explicitly enable the undocumented Go-plan fallback                   |
+| `COMMANDCODE_QUOTA_BOARD_URL`    | disabled                                                      | Send final Pi usage to a running local Quota Board                    |
+| `COMMANDCODE_QUOTA_BOARD_TOKEN`  | —                                                             | Bearer token for a non-loopback Quota Board                           |
+| `OPENSEC_ROUTER_URL`             | `https://cc.opensec.in` for member tokens; otherwise disabled | Lease a sticky CommandCode key from an OpenSec control plane          |
+| `OPENSEC_ROUTER_TOKEN`           | provider credential                                           | OpenSec access token; use this instead of a CommandCode key in Pi     |
 
 Legacy aliases `COMMANDCODE_API_KEY`, `COMMANDCODE_ZDR`, and existing auth-file shapes remain accepted for migration compatibility.
 
@@ -205,33 +205,18 @@ export COMMANDCODE_QUOTA_BOARD_URL="http://127.0.0.1:8787"
 
 The provider sends a one-way, best-effort usage event after each completed or failed request. It sends a short hash fingerprint—not the API key—so the board can match the event to an account already connected there. Dashboard availability never delays or breaks a Pi response.
 
-### Sticky multi-account leases
+### Sticky multi-account routing
 
-The Quota Board can also act as a lightweight key control plane. Pi obtains one CommandCode key for the active session, then sends requests and streams responses **directly between Pi and CommandCode**:
+An [OpenSec quota-board deployment with router support](https://github.com/opensec-git/commandcode-quota-board) can act as a lightweight control plane for a trusted Pi installation. It leases one real CommandCode key to each Pi session, while generation requests and streamed output continue to travel directly between Pi and CommandCode:
 
 ```bash
 export OPENSEC_ROUTER_URL="https://cc.opensec.in"
-export OPENSEC_ROUTER_TOKEN="<master router token>"
+export OPENSEC_ROUTER_TOKEN="<your OpenSec access token>"
 ```
 
-The first request for a Pi session obtains the eligible account with the highest safe remaining quota across its 5-hour, weekly, and monthly limits. The assignment stays in process memory for the entire session. There is no five-minute renewal, polling loop, or control-plane request between successful prompts. If CommandCode rejects the assigned key with an authentication, credit, quota, or rate-limit response, the provider requests one replacement lease, excludes the failed account, and retries the request once with the new key.
+Configure the same token as the Pi provider credential when environment injection is not available. The control plane keeps an established session on its assigned account until the client reports an authentication or explicit quota failure. When rotation is required, it selects the eligible account with the highest safe remaining quota; equal safe headroom is resolved by the highest aggregate remaining capacity. The plugin keeps leased upstream keys only in process memory. Renewal starts on use when the returned lease expiry is within one minute: Pi immediately keeps using the current upstream key while a small control-plane request renews it in the background, so an active stream is never interrupted. Final usage is reported asynchronously, and one automatic re-lease attempt handles quota/auth failures before surfacing an error.
 
-The control plane is therefore outside the generation data path. It sees lease metadata and asynchronous final usage, but prompts, tool calls, streamed tokens, and responses do not pass through it. Because Pi receives the upstream key, use this mode only on a trusted Pi host and always connect to the control plane over TLS.
-
-### Cost, cache, TTFT, and TPS
-
-The provider measures each direct CommandCode stream and exposes a running summary with:
-
-```text
-/commandcode-metrics
-```
-
-- **Weighted cache hit:** cache-read tokens divided by all prompt-side tokens (`new input + cache read + cache write`).
-- **Weighted TPS:** output tokens divided by summed generation time, measured from the first text/reasoning token through completion.
-- **TTFT:** time from starting the direct provider request to its first text/reasoning token.
-- **Estimated cost:** Pi token usage multiplied by this package's reviewed CommandCode pricing overlay.
-
-The Pi footer shows the running estimated cost, weighted cache hit, and weighted TPS. When a lease is active, the same measurements are reported asynchronously against that lease. CommandCode does not expose an OpenRouter-style per-generation reconciliation endpoint, so the package labels pricing as estimated instead of presenting it as an exact provider charge.
+Because the trusted plugin receives the selected upstream key, this mode avoids proxy latency but cannot conceal CommandCode credentials from the machine running Pi. Use TLS and protect `OPENSEC_ROUTER_TOKEN` as a personal access credential.
 
 ## Legacy Go mode
 
@@ -271,7 +256,7 @@ Pi's provider timeout and retry settings apply. A value of `httpIdleTimeoutMs: 0
 ## Development
 
 ```bash
-git clone https://github.com/Kushalkhemka/pi-commandcode-provider.git
+git clone https://github.com/opensec-git/pi-commandcode-provider.git
 cd pi-commandcode-provider
 npm ci
 npm test
@@ -307,7 +292,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for testing expectations and [RELEASE.md]
 
 ```bash
 pi update --extensions
-pi remove npm:@kushalkhemka/pi-commandcode-provider
+pi remove npm:pi-commandcode
 ```
 
 ## Acknowledgements
@@ -317,3 +302,47 @@ This project is a maintained fork of [`patlux/pi-commandcode-provider`](https://
 ## License
 
 [MIT](LICENSE) © Pat Woz and contributors.
+
+### OpenSec team access and telemetry
+
+Each member uses their own `OPENSEC_ROUTER_TOKEN` issued from the OpenSec **Team & access** page. The upstream CommandCode pool stays shared. No upstream key or quota share is reserved for a member. Sessions are cached separately for each router token.
+
+Routed usage is attributed to the request's lease, including after rotation. Reports use stable event IDs, batched at up to 10 events or after two seconds. Only one upload runs per process; buffered and in-flight payloads share a 256 KiB cap. Transient failures retry with backoff and `Retry-After`, for up to five attempts / five minutes. Permanent rejections are dropped with a count-only warning. No prompts or response text are sent. Generic quota-board reporting is suppressed while router mode is active to avoid duplicate reporting. Normal shutdown attempts a bounded flush; an abrupt exit may lose buffered events. This is best-effort attribution, not verified billing or hard spending enforcement.
+
+Deploy the team-capable server before this plugin: batching requires `POST /api/router/usage`. Existing older plugins continue to work with the server's single-event lease endpoint, but those older reports cannot be deduplicated across retries without event IDs.
+
+### OpenSec login without environment variables
+
+In the updated plugin, run `/login`, select **Command Code**, and paste your
+`os_member_...` token at the login prompt. Pi saves it in its local credential
+store. The plugin recognizes this token and leases from `https://cc.opensec.in`
+automatically; neither `OPENSEC_ROUTER_URL` nor `OPENSEC_ROUTER_TOKEN` is required.
+The first model request checks the token with the router; login checks its format
+only. Expired or revoked tokens are rejected by the router.
+
+Ask the workspace owner to create your token under your member in **Team & access → OpenSec API keys**.
+The `/commandcode-quota` command points OpenSec members to the dashboard for their
+usage. Ordinary CommandCode keys continue to use direct access.
+For another OpenSec deployment or an old shared token, keep the explicit router
+URL configuration. Existing environment credentials take precedence over saved
+credentials; remove an old `OPENSEC_ROUTER_TOKEN` before switching members.
+
+### OpenSec lease affinity
+
+The lease manager reuses one upstream key per authenticated Pi session and keeps
+Pi's stable prompt-cache key. Temporary 429 throttling and 5xx errors return to
+the normal retry/backoff policy without requesting a different account. Invalid
+credentials, payment failures and explicit quota exhaustion can still rotate.
+A rotation includes the failed account and lease ID, so concurrent or delayed
+failures reuse the replacement. Slow background renewal responses cannot
+restore an older lease, and subsequent retries use the current key even if the
+transport retained earlier authorization headers.
+
+The router preserves assignments across renewal and restart. Cache lifetime and
+actual cache hits remain controlled by CommandCode and its upstream providers.
+
+Router overrides require HTTPS (HTTP is accepted only for literal loopback
+addresses during local development), without URL credentials, queries or
+fragments. Lease and usage uploads reject redirects. Router error bodies are
+not displayed in Pi. A custom router is a trusted credential recipient selected
+through local configuration; do not configure an endpoint you do not control.
