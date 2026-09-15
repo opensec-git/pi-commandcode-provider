@@ -24,7 +24,7 @@ describe("package manifest", () => {
   it("publishes the maintained fork under its public npm scope", async () => {
     const manifest = await readPackageManifest()
 
-    assert.equal(manifest.name, "pi-commandcode")
+    assert.equal(manifest.name, "opensec-pi-commandcode")
     assert.equal(manifest.version, "1.0.0")
     assert.equal(
       manifest.repository?.url,

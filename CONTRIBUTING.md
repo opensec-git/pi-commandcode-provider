@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve `pi-commandcode`.
+Thanks for helping improve `opensec-pi-commandcode`.
 
 This is an unofficial Command Code provider for pi. Keep changes small, tested, and easy to review.
 

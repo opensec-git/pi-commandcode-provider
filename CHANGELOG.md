@@ -1,8 +1,8 @@
 # Changelog
 
-## 1.0.0 (pi-commandcode) — 2026-09-15
+## 1.0.0 (opensec-pi-commandcode) — 2026-09-15
 
-- Publish the maintained OpenSec Pi extension as the unscoped `pi-commandcode` npm package.
+- Publish the maintained OpenSec Pi extension as the unscoped `opensec-pi-commandcode` npm package.
 - Consolidate secure router leasing and current DeepSeek V4.1 Flash capabilities in the OpenSec repository.
 - Refresh model metadata from Command Code 1.54.0, including DeepSeek V4.1 Flash reasoning, low/high/max effort, and image support.
 - Cover the newly listed Ling 3.0 Flash Sante free model in pricing and catalog fixtures.

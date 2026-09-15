@@ -1,5 +1,5 @@
 /**
- * Integration smoke test for pi-commandcode.
+ * Integration smoke test for opensec-pi-commandcode.
  *
  * Tests that the extension:
  * 1. Loads without crashing in print mode
@@ -392,7 +392,7 @@ async function runRpcQuery() {
 // -------------------------------------------------------------------------
 
 console.log("=".repeat(60))
-console.log("  pi-commandcode Integration Smoke Test")
+console.log("  opensec-pi-commandcode Integration Smoke Test")
 console.log("=".repeat(60))
 console.log(`  Auth: ${HAS_AUTH ? "✓ found" : "✗ not found (tests will be skipped)"}`)
 console.log(`  Extension: ${EXT_PATH}`)
