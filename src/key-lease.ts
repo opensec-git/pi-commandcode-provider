@@ -1,4 +1,4 @@
-import { createHmac, randomBytes } from "node:crypto"
+import { createHash } from "node:crypto"
 import { configuredRouterToken, isOpenSecMemberToken, routerBaseUrl } from "./opensec-config.ts"
 import { UsageQueue } from "./usage-queue.ts"
 import type { ModelLike, StreamOptions } from "./types.ts"
@@ -109,7 +109,6 @@ export class CommandCodeKeyLeaseManager {
   private readonly renewalAfter = new Map<string, number>()
   private readonly inFlight = new Map<string, Promise<KeyLease>>()
   private readonly fallbackSession = `pi-${process.pid}-${crypto.randomUUID()}`
-  private readonly cacheKeySecret = randomBytes(32)
 
   constructor(private readonly fetchImpl: typeof fetch = fetch) {}
 
@@ -118,9 +117,9 @@ export class CommandCodeKeyLeaseManager {
   }
 
   private cacheKey(token: string, sessionId: string): string {
-    // Member tokens are high-entropy credentials. A per-instance HMAC keeps
-    // their cache identities separate without retaining a reusable digest.
-    return createHmac("sha256", this.cacheKeySecret).update(token).digest("hex") + ":" + sessionId
+    // Fast in-memory identity for high-entropy API tokens, not password storage.
+    // Keep token/session isolation without introducing a password KDF here.
+    return createHash("sha256").update(token).digest("hex") + ":" + sessionId
   }
 
   async resolve(model: ModelLike, options?: StreamOptions): Promise<StreamOptions | undefined> {
