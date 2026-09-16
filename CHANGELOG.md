@@ -2,6 +2,8 @@
 
 ## 1.0.2 — 2026-09-16
 
+- Silence background model-catalog and telemetry warnings by default; keep diagnostics in `/commandcode-status` and opt-in `COMMANDCODE_DEBUG=1` output.
+
 - Batch up to 25 usage reports every 10–15 seconds with jitter; handle individual rejected reports without losing valid reports in the batch.
 
 - Identify telemetry drops by HTTP status, timeout/network failure, queue capacity, report expiry, or shutdown without logging credentials or response bodies.

@@ -1,3 +1,4 @@
+import { backgroundWarning } from "./diagnostics.ts"
 import type { CommandCodeModel, LoadCommandCodeModelsResult } from "./models.ts"
 
 export interface CommandCodeUi {
@@ -31,6 +32,7 @@ export interface CommandCodeRuntimeOptions<TProviderConfig> {
   loadCachedModels: () => Promise<readonly CommandCodeModel[]>
   createProviderConfig: (models: readonly CommandCodeModel[]) => TProviderConfig
   getTransport?: () => "unknown" | "provider" | "generate"
+  getTelemetryStatus?: () => string
   now?: () => number
   logWarning?: (message: string) => void
 }
@@ -117,7 +119,8 @@ export class CommandCodeRuntime<TProviderConfig, TContext extends CommandCodeCom
     private readonly options: CommandCodeRuntimeOptions<TProviderConfig>,
   ) {
     this.now = options.now ?? Date.now
-    this.logWarning = options.logWarning ?? ((message) => console.warn(`[commandcode] ${message}`))
+    this.logWarning =
+      options.logWarning ?? ((message) => backgroundWarning(`[commandcode] ${message}`))
     const initialStatus: CommandCodeRuntimeStatus = {
       transport: "unknown",
       source: "empty",
@@ -303,7 +306,11 @@ export class CommandCodeRuntime<TProviderConfig, TContext extends CommandCodeCom
       description: "Show redacted Command Code provider diagnostics",
       handler: async (_args, ctx) => {
         const status = this.getStatus()
-        ctx.ui.notify(formatCommandCodeStatus(status), status.warning ? "warning" : "info")
+        const telemetry = this.options.getTelemetryStatus?.()
+        ctx.ui.notify(
+          formatCommandCodeStatus(status) + (telemetry ? `\n${telemetry}` : ""),
+          status.warning ? "warning" : "info",
+        )
       },
     })
   }

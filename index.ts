@@ -231,6 +231,12 @@ export default async function (pi: ExtensionAPI) {
     loadCachedModels: () => loadCachedCommandCodeModels(modelsCachePath),
     createProviderConfig: (models) => createProviderConfig(models, apiBase, transport.stream),
     getTransport: transport.getTransport,
+    getTelemetryStatus: () => {
+      const stats = keyLeaseManager.telemetryStats
+      return stats
+        ? `telemetry: ${stats.sent} sent, ${stats.dropped} dropped, ${stats.retries} retries; latest drop: ${stats.lastDropReason || "none"}`
+        : "telemetry: disabled"
+    },
   })
 
   pi.on("session_shutdown", async () => {

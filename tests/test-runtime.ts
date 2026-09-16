@@ -129,6 +129,38 @@ describe("Command Code runtime", () => {
     assert.doesNotMatch(statusMessage, /user_secret_value/)
   })
 
+  it("keeps background catalog warnings silent and exposes diagnostics on demand", async () => {
+    const previous = process.env.COMMANDCODE_DEBUG
+    delete process.env.COMMANDCODE_DEBUG
+    const warn = console.warn
+    const warnings: string[] = []
+    console.warn = (value) => warnings.push(String(value))
+    const pi = new ExtensionAPITestDouble()
+    const context = new CommandContext()
+    try {
+      const runtime = createCommandCodeRuntime(pi, {
+        endpoint: "https://api.commandcode.ai/provider/v1/models",
+        cachePath: "/tmp/catalog.json",
+        loadModels: async () => loaded([FIRST_MODEL], "cache", "Catalog temporarily unavailable"),
+        loadCachedModels: async () => [],
+        createProviderConfig: (models) => ({ models }),
+        getTelemetryStatus: () => "telemetry: 2 sent, 1 dropped",
+      })
+      await runtime.initialize()
+      assert.deepEqual(warnings, [])
+      assert.equal(runtime.getStatus().modelCount, 1)
+      assert.equal(runtime.getStatus().warning, "Catalog temporarily unavailable")
+      await pi.commands.get("commandcode-status")!("", context)
+      assert.match(context.notifications.at(-1)!.message, /Catalog temporarily unavailable/)
+      assert.match(context.notifications.at(-1)!.message, /telemetry: 2 sent, 1 dropped/)
+      runtime.dispose()
+    } finally {
+      console.warn = warn
+      if (previous === undefined) delete process.env.COMMANDCODE_DEBUG
+      else process.env.COMMANDCODE_DEBUG = previous
+    }
+  })
+
   it("coalesces overlapping refreshes and preserves the current catalog on failure", async () => {
     const pi = new ExtensionAPITestDouble()
     const warnings: string[] = []
