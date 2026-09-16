@@ -19,6 +19,9 @@ interface Item {
   createdAt: number
 }
 
+const BATCH_SIZE = 25
+const uploadDelay = () => 10_000 + Math.floor(Math.random() * 5000)
+
 /** Bounded, best-effort telemetry. Never awaited by model generation. */
 export class UsageQueue {
   private items: Item[] = []
@@ -31,7 +34,7 @@ export class UsageQueue {
   private activeAbort: AbortController | undefined
   private stopping = false
   private closed = false
-  readonly stats = { queued: 0, sent: 0, dropped: 0, retries: 0 }
+  readonly stats = { queued: 0, sent: 0, dropped: 0, retries: 0, lastDropReason: "" }
 
   constructor(
     private readonly url: string,
@@ -41,26 +44,27 @@ export class UsageQueue {
 
   enqueue(token: string, event: UsageReport): void {
     if (this.stopping) {
-      this.drop(1)
+      this.drop(1, "shutdown")
       return
     }
     const bytes = Buffer.byteLength(JSON.stringify(event)) + Buffer.byteLength(token) + 128
     if (this.bytes + bytes > this.maxBytes) {
-      this.drop(1)
+      this.drop(1, "queue capacity exceeded")
       return
     }
     this.items.push({ token, event, bytes, attempts: 0, createdAt: Date.now() })
     this.bytes += bytes
     this.stats.queued++
-    this.schedule(this.items.length >= 10 ? 0 : 2000)
+    this.schedule(this.items.length >= BATCH_SIZE ? 0 : uploadDelay())
   }
 
-  private drop(count: number) {
+  private drop(count: number, reason: string) {
+    this.stats.lastDropReason = reason
     this.stats.dropped += count
     if (Date.now() - this.warnedAt > 60_000) {
       this.warnedAt = Date.now()
       console.warn(
-        `[OpenSec telemetry] ${this.stats.dropped} events dropped; model requests are unaffected.`,
+        `[OpenSec telemetry] ${this.stats.dropped} events dropped; latest reason: ${reason}; model requests are unaffected.`,
       )
     }
   }
@@ -127,7 +131,7 @@ export class UsageQueue {
       this.closed = true
       this.activeAbort?.abort()
       for (const item of this.items) this.bytes -= item.bytes
-      if (this.items.length) this.drop(this.items.length)
+      if (this.items.length) this.drop(this.items.length, "shutdown deadline exceeded")
       this.items = []
       if (this.timer) clearTimeout(this.timer)
       this.timer = undefined
@@ -139,7 +143,7 @@ export class UsageQueue {
     this.items = this.items.filter((item) => {
       if (Date.now() - item.createdAt <= 300_000) return true
       this.bytes -= item.bytes
-      this.drop(1)
+      this.drop(1, "report expired after five minutes")
       return false
     })
     if (!this.items.length) return
@@ -155,12 +159,13 @@ export class UsageQueue {
     const token = this.items[0].token
     const batch: Item[] = []
     this.items = this.items.filter((item) => {
-      if (item.token !== token || batch.length >= 10) return true
+      if (item.token !== token || batch.length >= BATCH_SIZE) return true
       batch.push(item)
       return false
     })
     let retry = false
     let wait = 1000
+    let failure = "network error"
     const controller = new AbortController()
     this.activeAbort = controller
     try {
@@ -173,8 +178,36 @@ export class UsageQueue {
       })
       // Bound response handling; only status/headers are needed for acknowledgement.
       void response.body?.cancel().catch(() => undefined)
-      if (response.ok) this.stats.sent += batch.length
-      else {
+      if (response.ok) {
+        // Old servers omit this header and accepted the whole batch atomically.
+        // New servers commit valid reports and identify only permanent failures.
+        const header = response.headers.get("x-opensec-usage-rejected")
+        const rejected = new Map<number, string>()
+        if (header !== null) {
+          if (header.length > 2000) throw new Error("Invalid usage acknowledgement")
+          for (const entry of header.split(",")) {
+            const match = /^(\d+):(invalid_report|lease_not_found)$/.exec(entry)
+            const index = match ? Number(match[1]) : -1
+            if (!match || index >= batch.length || rejected.has(index))
+              throw new Error("Invalid usage acknowledgement")
+            rejected.set(index, match[2])
+          }
+        }
+        this.stats.sent += batch.length - rejected.size
+        for (const reason of rejected.values()) this.drop(1, `report rejected: ${reason}`)
+      } else {
+        // Only log status and server-owned allowlisted codes, never response bodies,
+        // credentials, or arbitrary upstream header values.
+        const code = response.headers.get("x-opensec-error-code")
+        const knownCodes = [
+          "invalid_report",
+          "unauthorized",
+          "forbidden",
+          "lease_not_found",
+          "rate_limited",
+          "backend_error",
+        ]
+        failure = `HTTP ${response.status}${code && knownCodes.includes(code) ? ` (${code})` : ""}`
         retry = response.status === 429 || response.status >= 500
         const header = response.headers.get("retry-after")
         if (header) {
@@ -184,9 +217,14 @@ export class UsageQueue {
             : Date.parse(header) - Date.now()
           if (Number.isFinite(duration)) wait = Math.max(wait, duration)
         }
-        if (!retry) this.drop(batch.length)
+        if (!retry) this.drop(batch.length, failure)
       }
-    } catch {
+    } catch (error) {
+      failure = controller.signal.aborted
+        ? "shutdown interrupted upload"
+        : error instanceof Error && error.name === "TimeoutError"
+          ? "upload timed out after five seconds"
+          : "network error"
       retry = true
     } finally {
       const retained: Item[] = []
@@ -201,7 +239,8 @@ export class UsageQueue {
           retained.push(item)
         } else {
           this.bytes -= item.bytes
-          if (retry) this.drop(1)
+          if (retry)
+            this.drop(1, `${this.closed ? "shutdown" : "retry budget exhausted"}: ${failure}`)
         }
       }
       if (retained.length) {
@@ -212,7 +251,7 @@ export class UsageQueue {
       } else this.nextAttempt = 0
       this.uploading = false
       if (this.activeAbort === controller) this.activeAbort = undefined
-      if (this.items.length) this.schedule(2000)
+      if (this.items.length) this.schedule(this.items.length >= BATCH_SIZE ? 0 : uploadDelay())
     }
   }
 }

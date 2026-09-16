@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.2 — 2026-09-16
+
+- Batch up to 25 usage reports every 10–15 seconds with jitter; handle individual rejected reports without losing valid reports in the batch.
+
+- Identify telemetry drops by HTTP status, timeout/network failure, queue capacity, report expiry, or shutdown without logging credentials or response bodies.
+
 ## 1.0.1 — 2026-09-15
 
 - Restore fast SHA-256 identities for the in-memory lease cache. Preserve sticky leases, concurrent acquisition coalescing, background renewal, lease validation, and bounded usage reporting.
