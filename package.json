@@ -1,6 +1,6 @@
 {
   "name": "opensec-pi-commandcode",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Production-grade CommandCode Provider API integration for Pi",
   "type": "module",
   "keywords": [
