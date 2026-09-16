@@ -1,3 +1,5 @@
+import { backgroundWarning } from "./diagnostics.ts"
+
 export interface UsageReport {
   eventId: string
   leaseId: string
@@ -63,7 +65,7 @@ export class UsageQueue {
     this.stats.dropped += count
     if (Date.now() - this.warnedAt > 60_000) {
       this.warnedAt = Date.now()
-      console.warn(
+      backgroundWarning(
         `[OpenSec telemetry] ${this.stats.dropped} events dropped; latest reason: ${reason}; model requests are unaffected.`,
       )
     }

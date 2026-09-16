@@ -47,6 +47,8 @@ describe("bounded OpenSec usage reporting", () => {
     assert.equal(queue.stats.sent, 3)
   })
   it("reports safe HTTP rejection reasons without logging bodies or arbitrary headers", async () => {
+    const originalDebug = process.env.COMMANDCODE_DEBUG
+    process.env.COMMANDCODE_DEBUG = "1"
     const warnings: string[] = []
     const warn = console.warn
     console.warn = (value) => warnings.push(String(value))
@@ -73,6 +75,31 @@ describe("bounded OpenSec usage reporting", () => {
       assert.doesNotMatch(warnings.join("\n"), /fixture-secret/)
     } finally {
       console.warn = warn
+      if (originalDebug === undefined) delete process.env.COMMANDCODE_DEBUG
+      else process.env.COMMANDCODE_DEBUG = originalDebug
+    }
+  })
+  it("records telemetry failures silently by default", async () => {
+    const originalDebug = process.env.COMMANDCODE_DEBUG
+    delete process.env.COMMANDCODE_DEBUG
+    const warnings: string[] = []
+    const warn = console.warn
+    console.warn = (value) => warnings.push(String(value))
+    try {
+      const queue = new UsageQueue(
+        "https://router.test",
+        async () => new Response(null, { status: 401 }),
+      )
+      queue.enqueue("member", report())
+      await queue.flush()
+      await queue.shutdown()
+      assert.equal(queue.stats.dropped, 1)
+      assert.equal(queue.stats.lastDropReason, "HTTP 401")
+      assert.deepEqual(warnings, [])
+    } finally {
+      console.warn = warn
+      if (originalDebug === undefined) delete process.env.COMMANDCODE_DEBUG
+      else process.env.COMMANDCODE_DEBUG = originalDebug
     }
   })
   it("identifies exhausted timeout retries without exposing exception text", async () => {

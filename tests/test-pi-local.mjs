@@ -242,6 +242,7 @@ const env = {
   OPENSEC_ROUTER_URL: "",
   OPENSEC_ROUTER_TOKEN: "",
   CMD_ZDR: "1",
+  COMMANDCODE_DEBUG: "",
   COMMANDCODE_MODELS_URL: `${apiBase}/provider/v1/models`,
 }
 
@@ -708,8 +709,8 @@ try {
     firstOfflineList.stdout || firstOfflineList.stderr,
     /No models matching|No models available/,
   )
-  assert.match(firstOfflineList.stderr, /no valid cached catalog/)
-  assert.match(firstOfflineList.stderr, /until \/commandcode-refresh succeeds/)
+  assert.doesNotMatch(firstOfflineList.stderr, /no valid cached catalog/)
+  assert.doesNotMatch(firstOfflineList.stderr, /until \/commandcode-refresh succeeds/)
   assert.throws(() => accessSync(modelsCachePath, constants.R_OK), /ENOENT|no such file/i)
 
   // A fresh process re-runs the extension entrypoint, which is the same path /reload uses.
@@ -751,10 +752,8 @@ try {
   assert.match(offlineListOutput, /gpt-5\.4/)
   assert.match(offlineListOutput, /cc-second-model/)
   // The cached catalog is registered before the background refresh fails, and
-  // `--list-models` exits as soon as the list is printed. Whether the refresh
-  // warning reaches stderr first depends on the host runtime (Bun flushes it,
-  // Node does not), so the warning is asserted on the print run below, which
-  // waits for the response.
+  // `--list-models` exits as soon as the list is printed. The print run below
+  // waits for a response and also verifies that background warnings stay quiet.
 
   console.log("[pi-local] use a cached model while model discovery is offline")
   requestCount = 0
@@ -774,7 +773,7 @@ try {
   )
   assert.equal(offlinePrint.code, 0, offlinePrint.stderr)
   assert.match(offlinePrint.stdout, /mock-pi-ok/)
-  assert.match(offlinePrint.stderr, /Using the cached catalog/)
+  assert.doesNotMatch(offlinePrint.stderr, /Using the cached catalog/)
   assert.equal(requestCount, 1)
   env.COMMANDCODE_MODELS_URL = onlineModelsUrl
 
@@ -790,7 +789,7 @@ try {
   const timeoutElapsedMs = Date.now() - timeoutStartedAt
   assert.equal(timedOutList.code, 0, timedOutList.stderr)
   assert.ok(timeoutElapsedMs < 2_000, `model discovery took ${timeoutElapsedMs}ms`)
-  assert.match(timedOutList.stderr, /timed out after 50ms/i)
+  assert.doesNotMatch(timedOutList.stderr, /timed out after 50ms/i)
   modelsDelayMs = 0
   delete env.COMMANDCODE_MODELS_TIMEOUT_MS
 
