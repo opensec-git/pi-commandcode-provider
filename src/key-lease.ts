@@ -76,11 +76,14 @@ function isQuotaFailure(response: Response): Promise<boolean> {
     .clone()
     .text()
     .then(
-      // Temporary throttling should use the core's Retry-After/backoff on the
-      // same key. Only an explicit capacity failure justifies losing affinity.
+      // Command Code wraps exhausted rolling windows in rate_limit_error, so
+      // classify the message's explicit capacity signal before its envelope.
+      // Generic per-minute throttling still uses core backoff on the same key.
       (body) =>
-        !/rate[_ -]?limit|too many requests|per[_ -]minute/i.test(body) &&
-        /quota|credits?|usage[_ -]?limit|exhausted|insufficient[_ -]?balance/i.test(body),
+        /quota|credits?|usage[_ -]?limit|exhausted|insufficient[_ -]?balance/i.test(body) ||
+        /(?:5|five)[_ -]?hour(?:ly)?[_ -]?(?:usage[_ -]?)?limit|weekly[_ -]?(?:usage[_ -]?)?limit|monthly[_ -]?(?:usage[_ -]?)?limit/i.test(
+          body,
+        ),
       () => false,
     )
 }

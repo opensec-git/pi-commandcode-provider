@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.3 — 2026-09-17
+
+- Rotate to another leased account when Command Code reports explicit 5-hour, weekly, or monthly usage exhaustion inside a `rate_limit_error` response. Generic transient rate limiting continues to retry the same account.
+
 ## 1.0.2 — 2026-09-16
 
 - Silence background model-catalog and telemetry warnings by default; keep diagnostics in `/commandcode-status` and opt-in `COMMANDCODE_DEBUG=1` output.
