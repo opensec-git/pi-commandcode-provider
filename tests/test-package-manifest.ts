@@ -25,7 +25,7 @@ describe("package manifest", () => {
     const manifest = await readPackageManifest()
 
     assert.equal(manifest.name, "opensec-pi-commandcode")
-    assert.equal(manifest.version, "1.0.3")
+    assert.equal(manifest.version, "1.0.4")
     assert.equal(
       manifest.repository?.url,
       "git+https://github.com/opensec-git/pi-commandcode-provider.git",

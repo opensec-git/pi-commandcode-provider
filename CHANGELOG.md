@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.4 — 2026-09-17
+
+- Continue through distinct leased accounts when consecutive Command Code accounts report explicit quota exhaustion.
+- Report provider reset times to compatible OpenSec routers so exhausted accounts are quarantined globally without background quota polling.
+
 ## 1.0.3 — 2026-09-17
 
 - Rotate to another leased account when Command Code reports explicit 5-hour, weekly, or monthly usage exhaustion inside a `rate_limit_error` response. Generic transient rate limiting continues to retry the same account.
