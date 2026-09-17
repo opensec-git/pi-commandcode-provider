@@ -214,7 +214,7 @@ export OPENSEC_ROUTER_URL="https://cc.opensec.in"
 export OPENSEC_ROUTER_TOKEN="<your OpenSec access token>"
 ```
 
-Configure the same token as the Pi provider credential when environment injection is not available. The control plane keeps an established session on its assigned account until the client reports an authentication or explicit quota failure. When rotation is required, it selects the eligible account with the highest safe remaining quota; equal safe headroom is resolved by the highest aggregate remaining capacity. The plugin keeps leased upstream keys only in process memory. Renewal starts on use when the returned lease expiry is within one minute: Pi immediately keeps using the current upstream key while a small control-plane request renews it in the background, so an active stream is never interrupted. Final usage is reported asynchronously, and one automatic re-lease attempt handles quota/auth failures before surfacing an error.
+Configure the same token as the Pi provider credential when environment injection is not available. The control plane keeps an established session on its assigned account until the client reports an authentication or explicit quota failure. When rotation is required, it selects the eligible account with the highest safe remaining quota; equal safe headroom is resolved by the highest aggregate remaining capacity. The plugin keeps leased upstream keys only in process memory. Renewal starts on use when the returned lease expiry is within one minute: Pi immediately keeps using the current upstream key while a small control-plane request renews it in the background, so an active stream is never interrupted. Final usage is reported asynchronously. Explicit quota failures carry only the failed lease, quota window, and provider reset time back to the control plane; the account is excluded globally until reset without an additional CommandCode quota check. A request walks up to 64 distinct leased accounts before surfacing the last provider error.
 
 Because the trusted plugin receives the selected upstream key, this mode avoids proxy latency but cannot conceal CommandCode credentials from the machine running Pi. Use TLS and protect `OPENSEC_ROUTER_TOKEN` as a personal access credential.
 
@@ -337,6 +337,12 @@ A rotation includes the failed account and lease ID, so concurrent or delayed
 failures reuse the replacement. Slow background renewal responses cannot
 restore an older lease, and subsequent retries use the current key even if the
 transport retained earlier authorization headers.
+
+When CommandCode returns an explicit rolling-window reset time, the same
+rotation reports that timestamp to OpenSec. The server validates it against the
+caller's lease and temporarily removes the account from all new allocations.
+The client keeps a per-request exclusion set, so consecutive exhausted accounts
+are never retried during the same generation.
 
 The router preserves assignments across renewal and restart. Cache lifetime and
 actual cache hits remain controlled by CommandCode and its upstream providers.

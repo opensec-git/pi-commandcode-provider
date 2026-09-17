@@ -19,7 +19,17 @@ interface LeaseRequest {
   model: string
   forceRotate?: boolean
   excludeAccountId?: string
+  excludeAccountIds?: string[]
   expectedLeaseId?: string
+  failedQuotaResetAt?: string
+  failedQuotaWindow?: "fiveHour" | "weekly" | "monthly"
+}
+
+interface LeaseFailure {
+  quota: boolean
+  body: string
+  resetAt?: string
+  window?: "fiveHour" | "weekly" | "monthly"
 }
 
 function parseLease(value: unknown): KeyLease {
@@ -47,6 +57,7 @@ function parseLease(value: unknown): KeyLease {
 }
 
 const RENEWAL_WINDOW_MS = 60_000
+const MAX_DISTINCT_ACCOUNT_ATTEMPTS = 64
 
 function joinUrl(base: string, path: string): string {
   return `${base.replace(/\/+$/, "")}${path}`
@@ -69,22 +80,41 @@ async function awaitLease<T>(task: Promise<T>, signal?: AbortSignal): Promise<T>
   }
 }
 
-function isQuotaFailure(response: Response): Promise<boolean> {
-  if ([401, 402].includes(response.status)) return Promise.resolve(true)
-  if (![403, 429].includes(response.status)) return Promise.resolve(false)
-  return response
+function resetAtFrom(body: string): string | undefined {
+  const value = body.match(
+    /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\b/i,
+  )?.[0]
+  return value && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : undefined
+}
+
+function quotaWindowFrom(body: string): LeaseFailure["window"] {
+  if (/(?:5|five)[_ -]?hour(?:ly)?/i.test(body)) return "fiveHour"
+  if (/weekly/i.test(body)) return "weekly"
+  if (/monthly/i.test(body)) return "monthly"
+  return undefined
+}
+
+async function leaseFailure(response: Response): Promise<LeaseFailure | undefined> {
+  if ([401, 402].includes(response.status)) return { quota: response.status === 402, body: "" }
+  if (![403, 429].includes(response.status)) return Promise.resolve(undefined)
+  return await response
     .clone()
     .text()
     .then(
       // Command Code wraps exhausted rolling windows in rate_limit_error, so
       // classify the message's explicit capacity signal before its envelope.
       // Generic per-minute throttling still uses core backoff on the same key.
-      (body) =>
-        /quota|credits?|usage[_ -]?limit|exhausted|insufficient[_ -]?balance/i.test(body) ||
-        /(?:5|five)[_ -]?hour(?:ly)?[_ -]?(?:usage[_ -]?)?limit|weekly[_ -]?(?:usage[_ -]?)?limit|monthly[_ -]?(?:usage[_ -]?)?limit/i.test(
-          body,
-        ),
-      () => false,
+      (body) => {
+        const quota =
+          /quota|credits?|usage[_ -]?limit|exhausted|insufficient[_ -]?balance/i.test(body) ||
+          /(?:5|five)[_ -]?hour(?:ly)?[_ -]?(?:usage[_ -]?)?limit|weekly[_ -]?(?:usage[_ -]?)?limit|monthly[_ -]?(?:usage[_ -]?)?limit/i.test(
+            body,
+          )
+        return quota
+          ? { quota: true, body, resetAt: resetAtFrom(body), window: quotaWindowFrom(body) }
+          : undefined
+      },
+      () => undefined,
     )
 }
 
@@ -170,34 +200,52 @@ export class CommandCodeKeyLeaseManager {
         // has already replaced this session's failed key.
         lease = this.leases.get(cacheKey) ?? lease
         routed.apiKey = lease.apiKey
-        const attempted = lease
-        let response = await fetchImpl(
-          input instanceof Request ? input.clone() : input,
-          replaceAuthorization(requestInit, attempted.apiKey, input),
-        )
-        if (!(await isQuotaFailure(response))) return response
-        // Core receives only the replacement; release the abandoned response
-        // even if lease allocation subsequently fails.
-        void response.body?.cancel().catch(() => undefined)
-        const replacement = await this.acquire(
-          {
-            sessionId,
-            model: model.id,
-            forceRotate: true,
-            excludeAccountId: attempted.accountId,
-            expectedLeaseId: attempted.leaseId,
-          },
-          token,
-          signal,
-        )
-        lease = replacement
-        routed.apiKey = replacement.apiKey
-        signal?.throwIfAborted()
-        response = await fetchImpl(
-          input instanceof Request ? input.clone() : input,
-          replaceAuthorization(requestInit, replacement.apiKey, input),
-        )
-        return response
+        const attemptedAccountIds = new Set<string>()
+        for (;;) {
+          const attempted = lease
+          const response = await fetchImpl(
+            input instanceof Request ? input.clone() : input,
+            replaceAuthorization(requestInit, attempted.apiKey, input),
+          )
+          const failure = await leaseFailure(response)
+          if (!failure) return response
+          attemptedAccountIds.add(attempted.accountId)
+          if (attemptedAccountIds.size >= MAX_DISTINCT_ACCOUNT_ATTEMPTS) return response
+
+          const providerFailure = new Response(failure.body, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: response.headers,
+          })
+          void response.body?.cancel().catch(() => undefined)
+
+          let replacement: KeyLease
+          try {
+            replacement = await this.acquire(
+              {
+                sessionId,
+                model: model.id,
+                forceRotate: true,
+                excludeAccountId: attempted.accountId,
+                excludeAccountIds: [...attemptedAccountIds],
+                expectedLeaseId: attempted.leaseId,
+                failedQuotaResetAt: failure.quota ? failure.resetAt : undefined,
+                failedQuotaWindow: failure.quota ? failure.window : undefined,
+              },
+              token,
+              signal,
+            )
+          } catch (error) {
+            if (signal?.aborted) throw error
+            return providerFailure
+          }
+          // An older router may alternate between already-tried accounts. Keep
+          // the useful provider error instead of looping or surfacing a router error.
+          if (attemptedAccountIds.has(replacement.accountId)) return providerFailure
+          lease = replacement
+          routed.apiKey = replacement.apiKey
+          signal?.throwIfAborted()
+        }
       },
     }
     return routed
@@ -248,7 +296,7 @@ export class CommandCodeKeyLeaseManager {
       return cached
     }
     if (!this.baseUrl) throw new Error("OpenSec router URL is not configured")
-    const requestKey = `${cacheKey}:${request.forceRotate ? `rotate:${request.expectedLeaseId ?? request.excludeAccountId ?? ""}` : bypassCache ? "renew" : "lease"}`
+    const requestKey = `${cacheKey}:${request.forceRotate ? `rotate:${request.expectedLeaseId ?? request.excludeAccountId ?? ""}:${request.failedQuotaResetAt ?? ""}` : bypassCache ? "renew" : "lease"}`
     const pending = this.inFlight.get(requestKey)
     if (pending) return pending
     const task = (async () => {

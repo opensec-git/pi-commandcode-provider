@@ -113,7 +113,7 @@ describe("OpenSec CommandCode key leasing", () => {
     }
   })
 
-  it("keeps a sticky session lease and rotates once before consuming a quota response", async () => {
+  it("keeps a sticky session lease and rotates before consuming a quota response", async () => {
     process.env.OPENSEC_ROUTER_URL = "https://router.test/cc"
     process.env.OPENSEC_ROUTER_TOKEN = "master-token"
     let leaseCalls = 0
@@ -268,20 +268,23 @@ describe("cache-preserving lease failures", () => {
     assert.equal(calls, 2)
     assert.deepEqual(keys, ["Bearer key-1", "Bearer key-2", "Bearer key-2"])
   })
-  it("rotates when Command Code wraps rolling-window exhaustion in a rate-limit envelope", async () => {
+  it("walks distinct accounts and reports each rolling-window reset to the router", async () => {
     const manager = setup()
     let leaseCalls = 0
-    globalThis.fetch = async () => Response.json(lease(++leaseCalls))
+    const leaseRequests: Record<string, unknown>[] = []
+    globalThis.fetch = async (_input, init) => {
+      leaseRequests.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+      return Response.json(lease(++leaseCalls))
+    }
     const providerKeys: string[] = []
     const options = await manager.resolve(makeModel(), {
       sessionId: "rolling-window",
       fetch: async (_input, init) => {
         providerKeys.push(new Headers(init?.headers).get("authorization")!)
-        if (providerKeys.length > 1) return new Response("ok")
+        if (providerKeys.length > 2) return new Response("ok")
         return Response.json(
           {
-            message:
-              "You've reached your 5-hour usage limit for your plan. Your limit resets at 2026-09-17T15:26:56.239Z.",
+            message: `You've reached your 5-hour usage limit for your plan. Your limit resets at 2099-09-17T1${providerKeys.length}:26:56.239Z.`,
             type: "rate_limit_error",
             code: "RATE_LIMITED",
           },
@@ -291,8 +294,60 @@ describe("cache-preserving lease failures", () => {
     })
 
     assert.equal((await options!.fetch!("https://provider.test"))!.status, 200)
-    assert.equal(leaseCalls, 2)
-    assert.deepEqual(providerKeys, ["Bearer key-1", "Bearer key-2"])
+    assert.equal(leaseCalls, 3)
+    assert.deepEqual(providerKeys, ["Bearer key-1", "Bearer key-2", "Bearer key-3"])
+    assert.deepEqual(leaseRequests[1], {
+      sessionId: "rolling-window",
+      model: "deepseek/deepseek-v4-flash",
+      forceRotate: true,
+      excludeAccountId: "account-1",
+      excludeAccountIds: ["account-1"],
+      expectedLeaseId: "lease-1",
+      failedQuotaResetAt: "2099-09-17T11:26:56.239Z",
+      failedQuotaWindow: "fiveHour",
+    })
+    assert.deepEqual(leaseRequests[2], {
+      sessionId: "rolling-window",
+      model: "deepseek/deepseek-v4-flash",
+      forceRotate: true,
+      excludeAccountId: "account-2",
+      excludeAccountIds: ["account-1", "account-2"],
+      expectedLeaseId: "lease-2",
+      failedQuotaResetAt: "2099-09-17T12:26:56.239Z",
+      failedQuotaWindow: "fiveHour",
+    })
+  })
+  it("returns the last provider quota error after the router exhausts candidates", async () => {
+    const manager = setup()
+    let leaseCalls = 0
+    globalThis.fetch = async () => {
+      leaseCalls += 1
+      return leaseCalls <= 3
+        ? Response.json(lease(leaseCalls))
+        : new Response("no candidates", { status: 503 })
+    }
+    const providerKeys: string[] = []
+    const options = await manager.resolve(makeModel(), {
+      sessionId: "all-exhausted",
+      fetch: async (_input, init) => {
+        providerKeys.push(new Headers(init?.headers).get("authorization")!)
+        return Response.json(
+          {
+            message:
+              "You've reached your 5-hour usage limit. Your limit resets at 2099-09-17T15:26:56.239Z.",
+            type: "rate_limit_error",
+            code: "RATE_LIMITED",
+          },
+          { status: 429 },
+        )
+      },
+    })
+
+    const response = await options!.fetch!("https://provider.test")
+    assert.equal(response.status, 429)
+    assert.match(await response.text(), /5-hour usage limit/)
+    assert.equal(leaseCalls, 4)
+    assert.deepEqual(providerKeys, ["Bearer key-1", "Bearer key-2", "Bearer key-3"])
   })
   it("preserves Request headers and updates both provider authentication headers on retries", async () => {
     const manager = setup()
@@ -397,7 +452,7 @@ describe("OpenSec credential destination boundaries", () => {
     ])
       assert.throws(() => routerBaseUrl(url))
   })
-  it("cancels the failed upstream response before acquiring a replacement", async () => {
+  it("cancels the failed upstream response and preserves it when no replacement exists", async () => {
     process.env.OPENSEC_ROUTER_URL = "https://router.test"
     process.env.OPENSEC_ROUTER_TOKEN = "fixture"
     let cancelled = false,
@@ -429,7 +484,7 @@ describe("OpenSec credential destination boundaries", () => {
           { status: 402 },
         ),
     })
-    await assert.rejects(options!.fetch!("https://provider.test"), /request failed/)
+    assert.equal((await options!.fetch!("https://provider.test")).status, 402)
     assert.equal(cancelled, true)
   })
   it("disables lease redirects and never exposes a router error body in Pi", async () => {
