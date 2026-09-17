@@ -268,6 +268,32 @@ describe("cache-preserving lease failures", () => {
     assert.equal(calls, 2)
     assert.deepEqual(keys, ["Bearer key-1", "Bearer key-2", "Bearer key-2"])
   })
+  it("rotates when Command Code wraps rolling-window exhaustion in a rate-limit envelope", async () => {
+    const manager = setup()
+    let leaseCalls = 0
+    globalThis.fetch = async () => Response.json(lease(++leaseCalls))
+    const providerKeys: string[] = []
+    const options = await manager.resolve(makeModel(), {
+      sessionId: "rolling-window",
+      fetch: async (_input, init) => {
+        providerKeys.push(new Headers(init?.headers).get("authorization")!)
+        if (providerKeys.length > 1) return new Response("ok")
+        return Response.json(
+          {
+            message:
+              "You've reached your 5-hour usage limit for your plan. Your limit resets at 2026-09-17T15:26:56.239Z.",
+            type: "rate_limit_error",
+            code: "RATE_LIMITED",
+          },
+          { status: 429 },
+        )
+      },
+    })
+
+    assert.equal((await options!.fetch!("https://provider.test"))!.status, 200)
+    assert.equal(leaseCalls, 2)
+    assert.deepEqual(providerKeys, ["Bearer key-1", "Bearer key-2"])
+  })
   it("preserves Request headers and updates both provider authentication headers on retries", async () => {
     const manager = setup()
     let calls = 0
