@@ -43,6 +43,7 @@ import { CommandCodeKeyLeaseManager } from "./src/key-lease.ts"
 import { configuredRouterToken } from "./src/opensec-config.ts"
 import { createCommandCodeRuntime } from "./src/runtime.ts"
 import { createCommandCodeTransportRouter } from "./src/transport.ts"
+import { createReapCaptureFromEnv } from "./src/reap-capture.ts"
 
 const COMMAND_CODE_API = "commandcode-custom"
 const COMPAT_SOURCE_ID = "pi-commandcode-provider"
@@ -171,6 +172,7 @@ export default async function (pi: ExtensionAPI) {
   })
   const quotaBoardReporter = createQuotaBoardReporter()
   const keyLeaseManager = new CommandCodeKeyLeaseManager()
+  const reapCapture = createReapCaptureFromEnv()
   const resolveStreamOptions = (
     options?: Parameters<typeof streamNativeProvider>[2],
   ): Parameters<typeof streamNativeProvider>[2] => {
@@ -180,6 +182,7 @@ export default async function (pi: ExtensionAPI) {
   }
   const transport = createCommandCodeTransportRouter({
     allowLegacyGenerate: process.env.COMMANDCODE_ENABLE_LEGACY_GO === "1",
+    reapCapture,
     createStream: () => new AssistantMessageEventStream(),
     resolveOptions: async (model, options) =>
       keyLeaseManager.resolve(model, resolveStreamOptions(options)),

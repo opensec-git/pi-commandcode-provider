@@ -126,6 +126,33 @@ describe("streamCommandCode — auth", () => {
 })
 
 describe("streamCommandCode — successful streams", () => {
+  it("uses a per-request fetch override so transport capture can observe legacy calls", async () => {
+    server.mockResponse({
+      type: "success",
+      events: [JSON.stringify({ type: "finish", finishReason: "stop" })],
+    })
+    let overrideCalls = 0
+    const { streamCommandCode } = createTestDeps({
+      apiBase: server.baseUrl(),
+      fetchImpl: async () => {
+        throw new Error("dependency fetch must not be used")
+      },
+    })
+
+    const events = await collectEvents(
+      streamCommandCode(makeModel(), makeContext(), {
+        apiKey: "option-key",
+        fetch: async (input, init) => {
+          overrideCalls += 1
+          return await fetch(input, init)
+        },
+      }),
+    )
+
+    assert.equal(overrideCalls, 1)
+    assert.equal(events.at(-1)?.type, "done")
+  })
+
   it("continues pause_turn responses and accumulates their content and usage", async () => {
     server.mockResponseQueue([
       {

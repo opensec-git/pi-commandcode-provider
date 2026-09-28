@@ -5,6 +5,7 @@ import type {
   ModelLike,
   StreamOptions,
 } from "./types.ts"
+import type { ReapCaptureRecorder, ReapRequestCapture } from "./reap-capture.ts"
 
 export type CommandCodeTransport = "unknown" | "provider" | "generate"
 
@@ -24,6 +25,7 @@ interface TransportDependencies {
   ) => AssistantMessageEventStreamLike
   observeEvent?: (event: AssistantMessageEvent, model: ModelLike, apiKey?: string) => void
   resolveOptions?: (model: ModelLike, options?: StreamOptions) => Promise<StreamOptions | undefined>
+  reapCapture?: ReapCaptureRecorder
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -62,14 +64,49 @@ export function createCommandCodeTransportRouter(deps: TransportDependencies) {
     model: ModelLike,
     apiKey?: string,
     onUsageEvent?: StreamOptions["onUsageEvent"],
-  ): Promise<void> {
+    capture?: ReapRequestCapture,
+  ): Promise<AssistantMessageEvent | undefined> {
     return (async () => {
+      let terminal: AssistantMessageEvent | undefined
       for await (const event of source) {
-        target.push(event)
-        if (!onUsageEvent) deps.observeEvent?.(event, model, apiKey)
-        onUsageEvent?.(event)
+        capture?.observeEvent(event)
+        if (event.type === "done" || event.type === "error") {
+          terminal = event
+          continue
+        }
+        emit(event, target, model, apiKey, onUsageEvent)
       }
+      return terminal
     })()
+  }
+
+  function emit(
+    event: AssistantMessageEvent,
+    target: AssistantMessageEventStreamLike,
+    model: ModelLike,
+    apiKey: string | undefined,
+    onUsageEvent: StreamOptions["onUsageEvent"],
+  ): void {
+    target.push(event)
+    if (!onUsageEvent) deps.observeEvent?.(event, model, apiKey)
+    onUsageEvent?.(event)
+  }
+
+  async function finalizeCapture(
+    capture: ReapRequestCapture | undefined,
+    terminal: AssistantMessageEvent | undefined,
+  ): Promise<void> {
+    if (!capture) return
+    if (terminal?.type === "done") await capture.finalize("completed")
+    else if (terminal?.type === "error" && terminal.reason === "aborted")
+      await capture.finalize("aborted", terminal.error.errorMessage)
+    else
+      await capture.finalize(
+        "failed",
+        terminal?.type === "error"
+          ? terminal.error.errorMessage
+          : "Stream ended without a terminal event",
+      )
   }
 
   return {
@@ -94,14 +131,24 @@ export function createCommandCodeTransportRouter(deps: TransportDependencies) {
       const requestApiKey = options?.apiKey
       const output = deps.createStream()
       let resolvedOptions = options
+      let capture: ReapRequestCapture | undefined
+      let captureFinalized = false
 
       const run = async () => {
         resolvedOptions = (await deps.resolveOptions?.(model, options)) ?? options
+        if (deps.reapCapture) {
+          try {
+            capture = await deps.reapCapture.begin({ model, context, options: resolvedOptions })
+          } catch (error) {
+            if (deps.reapCapture.required) throw error
+          }
+        }
+        const capturedOptions = capture?.wrapOptions(resolvedOptions) ?? resolvedOptions
         const resolvedApiKey = resolvedOptions?.apiKey
         let upgradeRequired = false
-        const fetchImpl = resolvedOptions?.fetch ?? fetch
+        const fetchImpl = capturedOptions?.fetch ?? fetch
         const providerOptions: StreamOptions = {
-          ...resolvedOptions,
+          ...capturedOptions,
           fetch: async (input, init) => {
             const response = await fetchImpl(input, init)
             if (deps.allowLegacyGenerate && (await isUpgradeRequired(response)))
@@ -110,47 +157,59 @@ export function createCommandCodeTransportRouter(deps: TransportDependencies) {
           },
           onResponse: async (response, responseModel) => {
             if (upgradeRequired) return
-            await resolvedOptions?.onResponse?.(response, responseModel)
+            await capturedOptions?.onResponse?.(response, responseModel)
           },
         }
         if (transport === "generate") {
-          await pipe(
-            deps.streamGenerate(model, context, resolvedOptions),
+          capture?.recordTransport("generate")
+          const terminal = await pipe(
+            deps.streamGenerate(model, context, capturedOptions),
             output,
             model,
             resolvedApiKey,
             resolvedOptions?.onUsageEvent,
+            capture,
           )
+          captureFinalized = true
+          await finalizeCapture(capture, terminal)
+          if (terminal) emit(terminal, output, model, resolvedApiKey, resolvedOptions?.onUsageEvent)
           output.end()
           return
         }
+        capture?.recordTransport("provider")
         const providerStream = deps.streamProvider(model, context, providerOptions)
+        let terminal: AssistantMessageEvent | undefined
 
         for await (const event of providerStream) {
           if (!upgradeRequired) {
             if (apiKey === requestApiKey) transport = "provider"
-            output.push(event)
-            if (!resolvedOptions?.onUsageEvent)
-              deps.observeEvent?.(event, model, resolvedOptions?.apiKey)
-            resolvedOptions?.onUsageEvent?.(event)
+            capture?.observeEvent(event)
+            if (event.type === "done" || event.type === "error") terminal = event
+            else emit(event, output, model, resolvedOptions?.apiKey, resolvedOptions?.onUsageEvent)
           }
         }
 
         if (upgradeRequired) {
           if (apiKey === requestApiKey) transport = "generate"
-          await pipe(
-            deps.streamGenerate(model, context, resolvedOptions),
+          capture?.recordTransport("generate")
+          terminal = await pipe(
+            deps.streamGenerate(model, context, capturedOptions),
             output,
             model,
             resolvedOptions?.apiKey,
             resolvedOptions?.onUsageEvent,
+            capture,
           )
         }
+        captureFinalized = true
+        await finalizeCapture(capture, terminal)
+        if (terminal)
+          emit(terminal, output, model, resolvedOptions?.apiKey, resolvedOptions?.onUsageEvent)
         output.end()
       }
 
-      run().catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error)
+      run().catch(async (error: unknown) => {
+        let message = error instanceof Error ? error.message : String(error)
         const event: AssistantMessageEvent = {
           type: "error",
           reason: "error",
@@ -172,6 +231,19 @@ export function createCommandCodeTransportRouter(deps: TransportDependencies) {
             errorMessage: message,
             timestamp: Date.now(),
           },
+        }
+        if (capture && !captureFinalized) {
+          capture.observeEvent(event)
+          captureFinalized = true
+          try {
+            await capture.finalize(
+              error instanceof DOMException && error.name === "AbortError" ? "aborted" : "failed",
+              error,
+            )
+          } catch (captureError) {
+            message = captureError instanceof Error ? captureError.message : String(captureError)
+            event.error.errorMessage = message
+          }
         }
         output.push(event)
         try {

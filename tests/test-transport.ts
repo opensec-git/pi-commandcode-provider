@@ -1,6 +1,10 @@
 import assert from "node:assert/strict"
+import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { describe, it } from "node:test"
 
+import { ReapCaptureStore } from "../src/reap-capture.ts"
 import { createCommandCodeTransportRouter } from "../src/transport.ts"
 import type {
   AssistantMessageEvent,
@@ -62,6 +66,99 @@ function providerStream(
 }
 
 describe("Command Code transport router", () => {
+  it("commits a capture bundle before forwarding the terminal event", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "commandcode-transport-reap-"))
+    try {
+      const captureStore = new ReapCaptureStore({ rootDir })
+      const router = createCommandCodeTransportRouter({
+        createStream: createTestEventStream,
+        reapCapture: captureStore,
+        streamProvider: (model, _context, options) => {
+          const stream = createTestEventStream()
+          const run = async () => {
+            await options?.onPayload?.({ model: model.id, messages: [] }, model)
+            const response = await (options?.fetch ?? fetch)("https://provider.test/chat", {
+              method: "POST",
+              headers: {
+                Authorization: "Bearer secret",
+                "Content-Type": "application/json",
+              },
+              body: '{"messages":[]}',
+            })
+            await response.text()
+            for await (const event of completedStream("captured")) stream.push(event)
+            stream.end()
+          }
+          run().catch(() => stream.end())
+          return stream
+        },
+        streamGenerate: () => completedStream("unused"),
+      })
+
+      const events = await collectEvents(
+        router.stream(makeModel(), makeContext(), {
+          apiKey: "secret",
+          sessionId: "session-9",
+          fetch: async () =>
+            new Response('data: {"ok":true}\n\n', {
+              headers: { "content-type": "text/event-stream" },
+            }),
+        }),
+      )
+      assert.equal(events.at(-1)?.type, "done")
+
+      const requests = await readdir(join(rootDir, "requests"))
+      assert.equal(requests.length, 1)
+      const requestDir = join(rootDir, "requests", requests[0])
+      assert.ok((await stat(join(requestDir, "COMMITTED"))).isFile())
+      const manifest = JSON.parse(await readFile(join(requestDir, "manifest.json"), "utf8"))
+      assert.equal(manifest.transport, "provider")
+      assert.equal(manifest.session_id, "session-9")
+      assert.equal(manifest.attempts, 1)
+      const saved = await readFile(join(requestDir, "attempts", "0001", "request.json"), "utf8")
+      assert.doesNotMatch(saved, /Bearer secret/)
+    } finally {
+      await rm(rootDir, { recursive: true, force: true })
+    }
+  })
+
+  it("fails closed when required capture initialization fails", async () => {
+    const router = createCommandCodeTransportRouter({
+      createStream: createTestEventStream,
+      reapCapture: {
+        required: true,
+        begin: async () => {
+          throw new Error("capture unavailable")
+        },
+      },
+      streamProvider: () => completedStream("must not run"),
+      streamGenerate: () => completedStream("must not run"),
+    })
+
+    const events = await collectEvents(router.stream(makeModel(), makeContext()))
+    assert.equal(events.length, 1)
+    assert.equal(events[0].type, "error")
+    if (events[0].type === "error")
+      assert.match(events[0].error.errorMessage ?? "", /capture unavailable/)
+  })
+
+  it("continues when best-effort capture initialization fails", async () => {
+    const router = createCommandCodeTransportRouter({
+      createStream: createTestEventStream,
+      reapCapture: {
+        required: false,
+        begin: async () => {
+          throw new Error("capture unavailable")
+        },
+      },
+      streamProvider: () => completedStream("provider"),
+      streamGenerate: () => completedStream("unused"),
+    })
+
+    const events = await collectEvents(router.stream(makeModel(), makeContext()))
+    assert.equal(events.at(-1)?.type, "done")
+  })
+
   it("resolves leased stream options before starting the provider request", async () => {
     let receivedKey: string | undefined
     const router = createCommandCodeTransportRouter({

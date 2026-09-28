@@ -82,6 +82,11 @@ export interface BeginReapCaptureOptions {
   options?: StreamOptions
 }
 
+export interface ReapCaptureRecorder {
+  readonly required: boolean
+  begin(args: BeginReapCaptureOptions): Promise<ReapRequestCapture>
+}
+
 interface SanitizedHeaders {
   values: Record<string, string>
   omitted_header_names: string[]
@@ -271,8 +276,9 @@ export class ReapRequestCapture {
     this.attempts.push(attempt)
     this.manifest.attempts = this.attempts.length
 
+    let request: Request
     try {
-      const request = new Request(input, init)
+      request = new Request(input, init)
       const body = new Uint8Array(await request.clone().arrayBuffer())
       await ensurePrivateDirectory(directory)
       await Promise.all([
@@ -286,9 +292,28 @@ export class ReapRequestCapture {
         }),
         writePrivateFile(join(directory, "request.body.bin"), body),
       ])
+    } catch (captureError) {
+      this.captureError ??= captureError
+      if (this.required) throw captureError
+      return await fetchImpl(input, init)
+    }
 
-      const startedAt = new Date().toISOString()
-      const response = await fetchImpl(input, init)
+    const startedAt = new Date().toISOString()
+    let response: Response
+    try {
+      response = await fetchImpl(input, init)
+    } catch (upstreamError) {
+      await writeJson(join(directory, "attempt.error.json"), {
+        attempt_index: index,
+        error: errorMessage(upstreamError),
+        timestamp: new Date().toISOString(),
+      }).catch((captureError: unknown) => {
+        this.captureError ??= captureError
+      })
+      throw upstreamError
+    }
+
+    try {
       await writeJson(join(directory, "response.json"), {
         attempt_index: index,
         started_at: startedAt,
@@ -304,24 +329,26 @@ export class ReapRequestCapture {
       attempt.responseDone = this.recordEmptyResponseBody(attempt)
       await attempt.responseDone
       return response
-    } catch (error) {
+    } catch (captureError) {
       await writeJson(join(directory, "attempt.error.json"), {
         attempt_index: index,
-        error: errorMessage(error),
+        error: errorMessage(captureError),
         timestamp: new Date().toISOString(),
       }).catch(() => undefined)
-      this.captureError ??= error
-      throw error
+      this.captureError ??= captureError
+      if (this.required) throw captureError
+      return response
     }
   }
 
   private async createTappedResponse(response: Response, attempt: AttemptState): Promise<Response> {
     const source = response.body
     if (!source) return response
-    const reader = source.getReader()
     const file = await open(join(attempt.directory, "response.body.bin"), "w", 0o600)
+    const reader = source.getReader()
     const hash = createHash("sha256")
     let bytes = 0
+    let bodyCaptureError: unknown
     let settled = false
     let resolveDone!: () => void
     let rejectDone!: (error: unknown) => void
@@ -355,13 +382,21 @@ export class ReapRequestCapture {
         try {
           const chunk = await reader.read()
           if (chunk.done) {
-            await finish("complete")
+            await finish(bodyCaptureError ? "error" : "complete", bodyCaptureError)
             controller.close()
             return
           }
-          bytes += chunk.value.byteLength
-          hash.update(chunk.value)
-          await file.write(chunk.value)
+          if (!bodyCaptureError) {
+            try {
+              await file.write(chunk.value)
+              bytes += chunk.value.byteLength
+              hash.update(chunk.value)
+            } catch (captureError) {
+              bodyCaptureError = captureError
+              this.captureError ??= captureError
+              if (this.required) throw captureError
+            }
+          }
           controller.enqueue(chunk.value)
         } catch (error) {
           await finish("error", error)
@@ -394,19 +429,25 @@ export class ReapRequestCapture {
     if (this.finalized) return
     this.finalized = true
     await this.queue
-    await Promise.all(this.attempts.map((attempt) => attempt.responseDone).filter(Boolean))
+    try {
+      await Promise.all(this.attempts.map((attempt) => attempt.responseDone).filter(Boolean))
+    } catch (responseCaptureError) {
+      this.captureError ??= responseCaptureError
+    }
 
     if (this.captureError && this.required) throw this.captureError
 
     try {
       if (this.lastMessage)
         await writeJson(join(this.inflightDir, "normalized-response.json"), this.lastMessage)
-      this.manifest.status = status
+      const finalStatus = this.captureError ? "failed" : status
+      this.manifest.status = finalStatus
       this.manifest.completed_at = new Date().toISOString()
-      if (error !== undefined) this.manifest.terminal_error = errorMessage(error)
+      if (error !== undefined || this.captureError !== undefined)
+        this.manifest.terminal_error = errorMessage(error ?? this.captureError)
       await writeJsonAtomic(join(this.inflightDir, "manifest.json"), this.manifest)
       const marker =
-        status === "completed" ? "COMMITTED" : status === "aborted" ? "ABORTED" : "FAILED"
+        finalStatus === "completed" ? "COMMITTED" : finalStatus === "aborted" ? "ABORTED" : "FAILED"
       await writePrivateFile(join(this.inflightDir, marker), `${this.manifest.completed_at}\n`)
       await ensurePrivateDirectory(dirname(this.finalDir))
       await rename(this.inflightDir, this.finalDir)

@@ -634,7 +634,7 @@ export function createStreamCommandCode(deps: CoreDependencies) {
 
           try {
             try {
-              response = await fetchImpl(`${apiBase}/alpha/generate`, {
+              response = await (options?.fetch ?? fetchImpl)(`${apiBase}/alpha/generate`, {
                 method: "POST",
                 headers: requestHeaders,
                 body: bodyStr,
