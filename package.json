@@ -31,6 +31,7 @@
   "files": [
     "index.ts",
     "src/",
+    "docs/",
     "scripts/",
     "README.md",
     "CHANGELOG.md",

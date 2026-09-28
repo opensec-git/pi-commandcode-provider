@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Add opt-in, replay-grade REAP capture for Provider API and legacy transport requests, including
+  exact request/response bodies, retry attempts, normalized Pi context and output, hashes, lineage,
+  private permissions, credential-safe metadata, and atomic completion markers.
+- Keep capture fail-closed by default for calibration integrity, with an explicit best-effort mode.
+- Allow the legacy transport to honor a per-request fetch wrapper so the same recorder covers both
+  transport paths.
+
 ## 1.0.4 — 2026-09-17
 
 - Continue through distinct leased accounts when consecutive Command Code accounts report explicit quota exhaustion.
