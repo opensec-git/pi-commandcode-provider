@@ -25,7 +25,7 @@
 - **Current capabilities** synchronized from `command-code@1.54.0`
 - **Explicit pricing coverage** for every model in the current live Provider API catalog
 - **Zero-data-retention header** support through `CMD_ZDR=1`
-- **Opt-in replay-grade request capture** for offline REAP coefficient passes
+- **Mandatory replay-grade request capture** for offline REAP coefficient passes
 - **No runtime dependency bundle**—the extension uses Pi's own core packages
 
 ## Install
@@ -178,34 +178,34 @@ Displayed costs are estimates. CommandCode's usage page remains authoritative fo
 
 ## Configuration
 
-| Variable                            | Default                                                       | Description                                                           |
-| ----------------------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `COMMAND_CODE_API_KEY`              | —                                                             | Preferred API-key environment variable                                |
-| `CMD_ZDR=1`                         | disabled                                                      | Send CommandCode's documented zero-data-retention header              |
-| `COMMANDCODE_API_BASE`              | Provider API URL                                              | Override the Provider API base for local tests or compatible gateways |
-| `COMMANDCODE_MODELS_URL`            | `/provider/v1/models`                                         | Override model discovery                                              |
-| `COMMANDCODE_MODELS_CACHE`          | Pi agent directory                                            | Override the catalog cache path                                       |
-| `COMMANDCODE_MODELS_TIMEOUT_MS`     | `10000`                                                       | Bound model discovery and refresh requests                            |
-| `COMMANDCODE_ENABLE_LEGACY_GO=1`    | disabled                                                      | Explicitly enable the undocumented Go-plan fallback                   |
-| `COMMANDCODE_REAP_CAPTURE=1`        | disabled                                                      | Persist replay-grade model request bundles                            |
-| `COMMANDCODE_REAP_CAPTURE_DIR`      | `~/.pi/reap-capture`                                          | Capture root; setting it also enables capture                         |
-| `COMMANDCODE_REAP_CAPTURE_REQUIRED` | `1`                                                           | Fail the model request if its capture cannot be committed             |
-| `COMMANDCODE_REAP_RUN_ID`           | —                                                             | Attach a calibration-run identifier to each bundle                    |
-| `COMMANDCODE_REAP_REPOSITORY`       | —                                                             | Attach the source repository identifier to each bundle                |
-| `COMMANDCODE_REAP_CAPTURE_ORIGIN`   | —                                                             | Attach a harness/origin label to each bundle                          |
-| `COMMANDCODE_QUOTA_BOARD_URL`       | disabled                                                      | Send final Pi usage to a running local Quota Board                    |
-| `COMMANDCODE_QUOTA_BOARD_TOKEN`     | —                                                             | Bearer token for a non-loopback Quota Board                           |
-| `OPENSEC_ROUTER_URL`                | `https://cc.opensec.in` for member tokens; otherwise disabled | Lease a sticky CommandCode key from an OpenSec control plane          |
-| `OPENSEC_ROUTER_TOKEN`              | provider credential                                           | OpenSec access token; use this instead of a CommandCode key in Pi     |
+| Variable                          | Default                                                       | Description                                                           |
+| --------------------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `COMMAND_CODE_API_KEY`            | —                                                             | Preferred API-key environment variable                                |
+| `CMD_ZDR=1`                       | disabled                                                      | Send CommandCode's documented zero-data-retention header              |
+| `COMMANDCODE_API_BASE`            | Provider API URL                                              | Override the Provider API base for local tests or compatible gateways |
+| `COMMANDCODE_MODELS_URL`          | `/provider/v1/models`                                         | Override model discovery                                              |
+| `COMMANDCODE_MODELS_CACHE`        | Pi agent directory                                            | Override the catalog cache path                                       |
+| `COMMANDCODE_MODELS_TIMEOUT_MS`   | `10000`                                                       | Bound model discovery and refresh requests                            |
+| `COMMANDCODE_ENABLE_LEGACY_GO=1`  | disabled                                                      | Explicitly enable the undocumented Go-plan fallback                   |
+| `COMMANDCODE_REAP_CAPTURE_DIR`    | `~/.pi/reap-capture`                                          | Override the mandatory capture root                                   |
+| `COMMANDCODE_REAP_RUN_ID`         | —                                                             | Attach a calibration-run identifier to each bundle                    |
+| `COMMANDCODE_REAP_REPOSITORY`     | —                                                             | Attach the source repository identifier to each bundle                |
+| `COMMANDCODE_REAP_CAPTURE_ORIGIN` | —                                                             | Attach a harness/origin label to each bundle                          |
+| `COMMANDCODE_QUOTA_BOARD_URL`     | disabled                                                      | Send final Pi usage to a running local Quota Board                    |
+| `COMMANDCODE_QUOTA_BOARD_TOKEN`   | —                                                             | Bearer token for a non-loopback Quota Board                           |
+| `OPENSEC_ROUTER_URL`              | `https://cc.opensec.in` for member tokens; otherwise disabled | Lease a sticky CommandCode key from an OpenSec control plane          |
+| `OPENSEC_ROUTER_TOKEN`            | provider credential                                           | OpenSec access token; use this instead of a CommandCode key in Pi     |
 
 Legacy aliases `COMMANDCODE_API_KEY`, `COMMANDCODE_ZDR`, and existing auth-file shapes remain accepted for migration compatibility.
 
 ## REAP replay capture
 
-Enable capture for a calibration run with:
+Capture is always enabled and fail-closed. Every model request must commit its replay bundle before
+Pi receives the terminal event. The default location is `~/.pi/reap-capture`; optionally move it to
+a mounted data volume:
 
 ```bash
-export COMMANDCODE_REAP_CAPTURE=1
+export COMMANDCODE_REAP_CAPTURE_DIR=/mnt/reap/pi-commandcode
 export COMMANDCODE_REAP_RUN_ID=calibration-2026-09-28
 export COMMANDCODE_REAP_REPOSITORY=owner/repository
 ```
@@ -215,6 +215,7 @@ final provider payload, exact serialized request body, raw streamed response, co
 events, hashes, retry attempts, and lineage. A `COMMITTED` marker is written before Pi receives the
 terminal event. Provider credentials and authentication-header values are not stored as request
 metadata; a secret deliberately placed inside prompt or tool content remains part of the exact body.
+If the capture directory cannot be initialized, written, or finalized, that inference request fails.
 
 Captures contain prompts, source snippets, tool results, and model output, so treat the directory as
 sensitive. Router/expert activations and the selected top-64 vocabulary logits are generated later by

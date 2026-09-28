@@ -122,11 +122,10 @@ describe("Command Code transport router", () => {
     }
   })
 
-  it("fails closed when required capture initialization fails", async () => {
+  it("fails closed when capture initialization fails", async () => {
     const router = createCommandCodeTransportRouter({
       createStream: createTestEventStream,
       reapCapture: {
-        required: true,
         begin: async () => {
           throw new Error("capture unavailable")
         },
@@ -140,23 +139,6 @@ describe("Command Code transport router", () => {
     assert.equal(events[0].type, "error")
     if (events[0].type === "error")
       assert.match(events[0].error.errorMessage ?? "", /capture unavailable/)
-  })
-
-  it("continues when best-effort capture initialization fails", async () => {
-    const router = createCommandCodeTransportRouter({
-      createStream: createTestEventStream,
-      reapCapture: {
-        required: false,
-        begin: async () => {
-          throw new Error("capture unavailable")
-        },
-      },
-      streamProvider: () => completedStream("provider"),
-      streamGenerate: () => completedStream("unused"),
-    })
-
-    const events = await collectEvents(router.stream(makeModel(), makeContext()))
-    assert.equal(events.at(-1)?.type, "done")
   })
 
   it("resolves leased stream options before starting the provider request", async () => {

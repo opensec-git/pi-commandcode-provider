@@ -69,7 +69,6 @@ interface ReapCaptureManifest {
 
 export interface ReapCaptureStoreOptions {
   rootDir: string
-  required?: boolean
   env?: NodeJS.ProcessEnv
   now?: () => Date
   uuid?: () => string
@@ -83,7 +82,6 @@ export interface BeginReapCaptureOptions {
 }
 
 export interface ReapCaptureRecorder {
-  readonly required: boolean
   begin(args: BeginReapCaptureOptions): Promise<ReapRequestCapture>
 }
 
@@ -96,11 +94,6 @@ interface AttemptState {
   index: number
   directory: string
   responseDone?: Promise<void>
-}
-
-function enabled(value: string | undefined): boolean {
-  if (!value) return false
-  return !["0", "false", "no", "off"].includes(value.trim().toLowerCase())
 }
 
 function sanitizeUrl(raw: string): string {
@@ -199,7 +192,6 @@ function responseWithBody(response: Response, body: ReadableStream<Uint8Array>):
 
 export class ReapRequestCapture {
   readonly requestId: string
-  readonly required: boolean
 
   private readonly inflightDir: string
   private readonly finalDir: string
@@ -212,14 +204,11 @@ export class ReapRequestCapture {
 
   constructor(args: {
     requestId: string
-    required: boolean
-    rootDir: string
     inflightDir: string
     finalDir: string
     manifest: ReapCaptureManifest
   }) {
     this.requestId = args.requestId
-    this.required = args.required
     this.inflightDir = args.inflightDir
     this.finalDir = args.finalDir
     this.manifest = args.manifest
@@ -294,8 +283,7 @@ export class ReapRequestCapture {
       ])
     } catch (captureError) {
       this.captureError ??= captureError
-      if (this.required) throw captureError
-      return await fetchImpl(input, init)
+      throw captureError
     }
 
     const startedAt = new Date().toISOString()
@@ -336,8 +324,7 @@ export class ReapRequestCapture {
         timestamp: new Date().toISOString(),
       }).catch(() => undefined)
       this.captureError ??= captureError
-      if (this.required) throw captureError
-      return response
+      throw captureError
     }
   }
 
@@ -348,7 +335,6 @@ export class ReapRequestCapture {
     const reader = source.getReader()
     const hash = createHash("sha256")
     let bytes = 0
-    let bodyCaptureError: unknown
     let settled = false
     let resolveDone!: () => void
     let rejectDone!: (error: unknown) => void
@@ -382,20 +368,17 @@ export class ReapRequestCapture {
         try {
           const chunk = await reader.read()
           if (chunk.done) {
-            await finish(bodyCaptureError ? "error" : "complete", bodyCaptureError)
+            await finish("complete")
             controller.close()
             return
           }
-          if (!bodyCaptureError) {
-            try {
-              await file.write(chunk.value)
-              bytes += chunk.value.byteLength
-              hash.update(chunk.value)
-            } catch (captureError) {
-              bodyCaptureError = captureError
-              this.captureError ??= captureError
-              if (this.required) throw captureError
-            }
+          try {
+            await file.write(chunk.value)
+            bytes += chunk.value.byteLength
+            hash.update(chunk.value)
+          } catch (captureError) {
+            this.captureError ??= captureError
+            throw captureError
           }
           controller.enqueue(chunk.value)
         } catch (error) {
@@ -435,32 +418,29 @@ export class ReapRequestCapture {
       this.captureError ??= responseCaptureError
     }
 
-    if (this.captureError && this.required) throw this.captureError
+    if (this.captureError) throw this.captureError
 
     try {
       if (this.lastMessage)
         await writeJson(join(this.inflightDir, "normalized-response.json"), this.lastMessage)
-      const finalStatus = this.captureError ? "failed" : status
-      this.manifest.status = finalStatus
+      this.manifest.status = status
       this.manifest.completed_at = new Date().toISOString()
-      if (error !== undefined || this.captureError !== undefined)
-        this.manifest.terminal_error = errorMessage(error ?? this.captureError)
+      if (error !== undefined) this.manifest.terminal_error = errorMessage(error)
       await writeJsonAtomic(join(this.inflightDir, "manifest.json"), this.manifest)
       const marker =
-        finalStatus === "completed" ? "COMMITTED" : finalStatus === "aborted" ? "ABORTED" : "FAILED"
+        status === "completed" ? "COMMITTED" : status === "aborted" ? "ABORTED" : "FAILED"
       await writePrivateFile(join(this.inflightDir, marker), `${this.manifest.completed_at}\n`)
       await ensurePrivateDirectory(dirname(this.finalDir))
       await rename(this.inflightDir, this.finalDir)
     } catch (finalizeError) {
       this.captureError ??= finalizeError
-      if (this.required) throw finalizeError
+      throw finalizeError
     }
   }
 }
 
 export class ReapCaptureStore {
   readonly rootDir: string
-  readonly required: boolean
 
   private readonly env: NodeJS.ProcessEnv
   private readonly now: () => Date
@@ -469,7 +449,6 @@ export class ReapCaptureStore {
 
   constructor(options: ReapCaptureStoreOptions) {
     this.rootDir = options.rootDir
-    this.required = options.required ?? true
     this.env = options.env ?? process.env
     this.now = options.now ?? (() => new Date())
     this.uuid = options.uuid ?? randomUUID
@@ -512,8 +491,6 @@ export class ReapCaptureStore {
     ])
     return new ReapRequestCapture({
       requestId,
-      required: this.required,
-      rootDir: this.rootDir,
       inflightDir,
       finalDir,
       manifest,
@@ -521,18 +498,8 @@ export class ReapCaptureStore {
   }
 }
 
-export function createReapCaptureFromEnv(
-  env: NodeJS.ProcessEnv = process.env,
-): ReapCaptureStore | undefined {
+export function createReapCaptureFromEnv(env: NodeJS.ProcessEnv = process.env): ReapCaptureStore {
   const configuredDir = env.COMMANDCODE_REAP_CAPTURE_DIR?.trim()
-  if (!configuredDir && !enabled(env.COMMANDCODE_REAP_CAPTURE)) return undefined
   const rootDir = configuredDir || join(homedir(), ".pi", "reap-capture")
-  return new ReapCaptureStore({
-    rootDir,
-    required:
-      env.COMMANDCODE_REAP_CAPTURE_REQUIRED === undefined
-        ? true
-        : enabled(env.COMMANDCODE_REAP_CAPTURE_REQUIRED),
-    env,
-  })
+  return new ReapCaptureStore({ rootDir, env })
 }

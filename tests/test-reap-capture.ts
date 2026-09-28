@@ -21,12 +21,16 @@ async function withTempDirectory(run: (path: string) => Promise<void>): Promise<
 }
 
 describe("REAP request capture", () => {
-  it("is opt-in and uses a home-directory default when enabled", () => {
-    assert.equal(createReapCaptureFromEnv({}), undefined)
-    const capture = createReapCaptureFromEnv({ COMMANDCODE_REAP_CAPTURE: "1" })
-    assert.ok(capture)
+  it("is always enabled and uses a home-directory default", () => {
+    const capture = createReapCaptureFromEnv({
+      COMMANDCODE_REAP_CAPTURE: "0",
+      COMMANDCODE_REAP_CAPTURE_REQUIRED: "0",
+    })
     assert.match(capture.rootDir, /[\\/]\.pi[\\/]reap-capture$/)
-    assert.equal(capture.required, true)
+    const overridden = createReapCaptureFromEnv({
+      COMMANDCODE_REAP_CAPTURE_DIR: "/mounted/reap",
+    })
+    assert.equal(overridden.rootDir, "/mounted/reap")
   })
 
   it("stores an atomic replay bundle without authentication credentials", async () => {

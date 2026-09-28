@@ -1,38 +1,25 @@
 # REAP replay capture
 
-The provider can persist an opt-in, replay-grade record of each CommandCode model request. These
+The provider persists a mandatory, replay-grade record of every CommandCode model request. These
 records let a later locally hosted copy of the same DeepSeek model reproduce the token sequence and
-collect router/expert measurements without rerunning the Pi agent or its tools.
+collect router/expert measurements without rerunning the Pi agent or its tools. A model request fails
+if its capture cannot be initialized, written, or finalized.
 
 This feature records data on the Pi machine. It does not start a model, upload data, or use GPU
 compute.
 
-## Enable capture
+## Capture location
 
-```bash
-export COMMANDCODE_REAP_CAPTURE=1
-```
-
-The default root is `~/.pi/reap-capture`. Set an explicit path when the capture should live on a
-mounted volume:
+Capture is always enabled and fail-closed. There is no enable/disable or best-effort environment
+switch. The default root is `~/.pi/reap-capture`. Set an explicit path when the capture should live
+on a mounted volume:
 
 ```bash
 export COMMANDCODE_REAP_CAPTURE_DIR=/mnt/reap/pi-commandcode
 ```
 
-Capture is fail-closed by default: Pi receives an error instead of a successful terminal event when
-a replay bundle cannot be committed. This is the recommended mode for a calibration run because it
-prevents an apparently complete trajectory from having missing inference data.
-
-For ordinary interactive use where inference is more important than capture completeness, opt into
-best-effort behavior:
-
-```bash
-export COMMANDCODE_REAP_CAPTURE_REQUIRED=0
-```
-
-Best-effort failures are marked `FAILED` when enough of the bundle can still be written. Never use a
-`FAILED` bundle as a complete calibration sample.
+Pi receives an error instead of a successful terminal event when a replay bundle cannot be committed.
+This prevents an apparently complete trajectory from having missing inference data.
 
 Optional lineage labels make later dataset assembly deterministic:
 
@@ -92,9 +79,9 @@ The files have these roles:
 | `response.json`            | Sanitized HTTP status/header metadata                                                         |
 | `response.complete.json`   | Stream completion state plus response byte length and SHA-256                                 |
 
-`COMMITTED` is the replay-eligibility marker. `ABORTED` and `FAILED` preserve useful diagnostic or
-partial data but are not complete samples. A directory left in `.inflight` means the process exited
-before finalization and must not be treated as committed.
+`COMMITTED` is the replay-eligibility marker. `ABORTED` and `FAILED` preserve data from requests that
+the model itself aborted or failed, but are not complete samples. A directory left in `.inflight`
+means the process exited or capture failed before finalization and must not be treated as committed.
 
 Directories use mode `0700` and files use mode `0600`.
 

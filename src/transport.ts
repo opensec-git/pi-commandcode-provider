@@ -137,11 +137,7 @@ export function createCommandCodeTransportRouter(deps: TransportDependencies) {
       const run = async () => {
         resolvedOptions = (await deps.resolveOptions?.(model, options)) ?? options
         if (deps.reapCapture) {
-          try {
-            capture = await deps.reapCapture.begin({ model, context, options: resolvedOptions })
-          } catch (error) {
-            if (deps.reapCapture.required) throw error
-          }
+          capture = await deps.reapCapture.begin({ model, context, options: resolvedOptions })
         }
         const capturedOptions = capture?.wrapOptions(resolvedOptions) ?? resolvedOptions
         const resolvedApiKey = resolvedOptions?.apiKey
