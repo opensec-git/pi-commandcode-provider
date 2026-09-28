@@ -81,7 +81,7 @@ The files have these roles:
 | Artifact                   | Purpose                                                                                       |
 | -------------------------- | --------------------------------------------------------------------------------------------- |
 | `manifest.json`            | Schema, request/model identity, lineage, transport, timestamps, status, and attempt count     |
-| `context.json`             | Pi system prompt, normalized message history, and tool definitions before provider conversion |
+| `context.json`             | Pi context passed to the provider, normally including normalized message history              |
 | `options.json`             | Non-secret generation controls such as maximum tokens, temperature, reasoning, and session ID |
 | `payload.json`             | Final provider payload after all `onPayload` transformations                                  |
 | `events.jsonl`             | Compact Pi stream events; repeated full partial messages are omitted from delta rows          |
@@ -133,3 +133,7 @@ The second pass should:
 The captured response fixes the semantic trajectory, but exact floating-point activations still
 depend on the local model revision, tokenizer, inference implementation, dtype, tensor-parallel layout,
 and determinism settings. Record those in the replay report.
+
+For repository-by-repository container runs, see [Docker setup for repository REAP
+runs](docker-reap-runs.md). It defines the required bind mounts, per-run isolation, working-directory
+checks, optional subagent outputs, and end-of-run acceptance gates.

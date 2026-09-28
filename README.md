@@ -224,6 +224,12 @@ CommandCode request.
 See [REAP replay capture](docs/reap-capture.md) for the v1 directory contract, failure semantics,
 lineage fields, privacy boundary, and second-pass requirements.
 
+When Pi runs in Docker, persist `/data/reap` and `/data/sessions` outside the container, mount the
+intended repository at Pi's real working directory, and use a unique run ID and capture directory for
+each repository. Temporary `/tmp/pi-subagents-*` output copies are not required for REAP when child
+sessions and provider captures are persistent and reconciled. See [Docker setup for repository REAP
+runs](docs/docker-reap-runs.md) for a Compose contract and end-of-run acceptance checks.
+
 ## CommandCode Quota Board
 
 The repository includes a separate [multi-account quota dashboard](./quota-board/README.md) with pure-black and light themes, global and per-key statistics, rolling quota windows, associated account emails, and encrypted local key storage.
